@@ -1,4 +1,4 @@
-<de.markusfisch.android.shadereditor.widget.BackBufferParametersView
+<com.termux.shadereditor.widget.BackBufferParametersView
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	android:id="@+id/backbuffer_parameters"
 	android:layout_width="match_parent"
@@ -14,4 +14,4 @@
 		android:layout_width="match_parent"
 		android:layout_height="wrap_content"
 		android:layout_marginBottom="8dp"/>
-</de.markusfisch.android.shadereditor.widget.BackBufferParametersView>
+</com.termux.shadereditor.widget.BackBufferParametersView>

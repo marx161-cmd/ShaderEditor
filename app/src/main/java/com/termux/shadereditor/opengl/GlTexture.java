@@ -1,0 +1,22 @@
+package com.termux.shadereditor.opengl;
+
+interface GlTexture {
+	int getId();
+
+	int getTarget();
+
+	int getWidth();
+
+	int getHeight();
+
+	boolean isValid();
+
+	void invalidate();
+
+	default void markBindingDirty() {
+	}
+
+	default boolean consumeBindingDirty() {
+		return false;
+	}
+}

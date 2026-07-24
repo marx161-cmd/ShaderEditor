@@ -1,6 +1,6 @@
 <merge xmlns:android="http://schemas.android.com/apk/res/android">
 	<!-- ShaderView as the background -->
-	<de.markusfisch.android.shadereditor.widget.ShaderView
+	<com.termux.shadereditor.widget.ShaderView
 		android:id="@+id/preview"
 		android:layout_width="match_parent"
 		android:layout_height="match_parent" />
@@ -21,7 +21,7 @@
 			<include layout="@layout/toolbar_main" />
 
 			<!-- DrawerLayout with main content -->
-			<de.markusfisch.android.shadereditor.widget.TouchThruDrawerLayout
+			<com.termux.shadereditor.widget.TouchThruDrawerLayout
 				android:id="@+id/drawer_layout"
 				android:layout_width="match_parent"
 				android:layout_height="0dp"
@@ -38,7 +38,7 @@
 				<!-- Navigation Drawer -->
 				<include layout="@layout/drawer" />
 
-			</de.markusfisch.android.shadereditor.widget.TouchThruDrawerLayout>
+			</com.termux.shadereditor.widget.TouchThruDrawerLayout>
 
 			<!-- Extra keys row at the bottom -->
 			<include

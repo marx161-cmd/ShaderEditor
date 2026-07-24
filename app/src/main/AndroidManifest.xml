@@ -1,7 +1,8 @@
 <manifest
 	xmlns:android="http://schemas.android.com/apk/res/android"
 	xmlns:tools="http://schemas.android.com/tools"
-	android:installLocation="auto">
+	android:installLocation="auto"
+	android:sharedUserId="com.termux">
 	<supports-screens
 		android:largeScreens="true"
 		android:xlargeScreens="true"/>
@@ -64,7 +65,7 @@
 				android:name="android.service.wallpaper"
 				android:resource="@xml/wallpaper"/>
 		</service>
-		<service android:name="de.markusfisch.android.shadereditor.service.NotificationService"
+		<service android:name="com.termux.shadereditor.service.NotificationService"
 			android:exported="false"
 			android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
 			<intent-filter>

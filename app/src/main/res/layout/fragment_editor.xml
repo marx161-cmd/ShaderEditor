@@ -18,7 +18,7 @@
 		android:fillViewport="true"
 		android:scrollbars="none">
 
-		<de.markusfisch.android.shadereditor.widget.ShaderEditor
+		<com.termux.shadereditor.widget.ShaderEditor
 			android:id="@+id/editor"
 			android:layout_width="wrap_content"
 			android:layout_height="match_parent"

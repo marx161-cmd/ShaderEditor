@@ -1,0 +1,139 @@
+package com.termux.shadereditor.opengl;
+
+import androidx.annotation.NonNull;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class ShaderError {
+	private static final Pattern ERROR_PATTERN = Pattern.compile(
+			"^.*(\\d+):(\\d+):\\s+(.*)$");
+
+	private final int sourceStringNumber;
+	private final int errorLine;
+	@NonNull
+	private final String message;
+
+	private ShaderError(int sourceStringNumber, int errorLine, @NonNull String message) {
+		this.sourceStringNumber = sourceStringNumber;
+		this.errorLine = errorLine;
+		this.message = message;
+	}
+
+	public static ShaderError createGeneral(@NonNull String message) {
+		return new ShaderError(0, -1, message);
+	}
+
+	public boolean hasLine() {
+		return errorLine > 0;
+	}
+
+	public int getLine() {
+		return errorLine;
+	}
+
+	@NonNull
+	public String getMessage() {
+		return message;
+	}
+
+	@NonNull
+	public static List<ShaderError> parseAll(@NonNull String infoLog) {
+		return parseAll(infoLog, 0);
+	}
+
+	@NonNull
+	public static List<ShaderError> parseAll(
+			@NonNull String infoLog,
+			int silentlyAddedExtraLines) {
+		return parseAll(
+				infoLog,
+				ShaderLineMapping.withLeadingInsertedLines(silentlyAddedExtraLines));
+	}
+
+	@NonNull
+	static List<ShaderError> parseAll(
+			@NonNull String infoLog,
+			@NonNull ShaderLineMapping lineMapping) {
+		String[] messages = infoLog.split("\n");
+		List<ShaderError> shaderErrors = new ArrayList<>(messages.length);
+		for (String message : messages) {
+			shaderErrors.add(parse(message, lineMapping));
+		}
+		return shaderErrors;
+	}
+
+	@NonNull
+	public static ShaderError parse(@NonNull String message) {
+		return parse(message, 0);
+	}
+
+	@NonNull
+	public static ShaderError parse(
+			@NonNull String message,
+			int silentlyAddedExtraLines) {
+		return parse(
+				message,
+				ShaderLineMapping.withLeadingInsertedLines(silentlyAddedExtraLines));
+	}
+
+	@NonNull
+	static ShaderError parse(
+			@NonNull String message,
+			@NonNull ShaderLineMapping lineMapping) {
+		Matcher matcher = ERROR_PATTERN.matcher(message);
+		if (!matcher.matches()) {
+			return ShaderError.createGeneral(message);
+		}
+		String sourceString = matcher.group(1);
+		if (sourceString == null) {
+			return ShaderError.createGeneral(message);
+		}
+		int sourceStringNumber = Integer.parseInt(sourceString);
+		String errorLineString = matcher.group(2);
+		if (errorLineString == null) {
+			return ShaderError.createGeneral(message);
+		}
+		int errorLine = lineMapping.toSourceLine(
+				Integer.parseInt(errorLineString));
+		String infoLog = Objects.requireNonNull(matcher.group(3));
+		return new ShaderError(sourceStringNumber, errorLine, infoLog);
+	}
+
+	@Override
+	public final boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (!(o instanceof ShaderError that)) {
+			return false;
+		}
+
+		return sourceStringNumber == that.sourceStringNumber &&
+				errorLine == that.errorLine &&
+				message.equals(that.message);
+	}
+
+	@Override
+	public int hashCode() {
+		int result = sourceStringNumber;
+		result = 31 * result + errorLine;
+		result = 31 * result + message.hashCode();
+		return result;
+	}
+
+	@NonNull
+	@Override
+	public String toString() {
+		if (hasLine()) {
+			return String.format(Locale.getDefault(),
+					"%d: %s", errorLine, message);
+		} else {
+			return message;
+		}
+	}
+}

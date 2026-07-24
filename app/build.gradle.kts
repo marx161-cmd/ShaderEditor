@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-	namespace = "de.markusfisch.android.shadereditor"
+	namespace = "com.termux.shadereditor"
 
 	compileSdk = 36
 
@@ -21,10 +21,10 @@ android {
 
 	signingConfigs {
 		create("release") {
-			keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-			keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-			storePassword = System.getenv("ANDROID_STORE_PASSWORD")
-			storeFile = System.getenv("ANDROID_KEYFILE")?.let { file(it) }
+			keyAlias = providers.gradleProperty("TERMUX_KEY_ALIAS").orNull
+			keyPassword = providers.gradleProperty("TERMUX_KEY_PASSWORD").orNull
+			storePassword = providers.gradleProperty("TERMUX_STORE_PASSWORD").orNull
+			storeFile = providers.gradleProperty("TERMUX_KEYSTORE").map { file(it) }.orNull
 		}
 	}
 
@@ -38,6 +38,9 @@ android {
 			isShrinkResources = true
 			signingConfig = signingConfigs["release"]
 		}
+	}
+	lint {
+		checkReleaseBuilds = false
 	}
 
 	buildFeatures {
