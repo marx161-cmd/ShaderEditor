@@ -27,14 +27,15 @@ final class BuiltinSystemUniforms {
 	private static final long BATTERY_UPDATE_INTERVAL = 10000000000L;
 	private static final long DATE_UPDATE_INTERVAL = 1000000000L;
 	private static final long MEDIA_VOLUME_UPDATE_INTERVAL = 1000000000L;
+	// Matches audio_reactive.lua's own 20Hz write rate — polling faster than
+	// the source updates just adds file-read overhead for no new data.
+	private static final long MPV_AUDIO_LEVEL_UPDATE_INTERVAL = 50000000L;
 
 	// com.termux.mpv shares this app's UID (android.uid.system), so its
 	// private app data is directly readable here — no IPC, no permission,
 	// same "zero sandbox" pattern as the rest of the com.termux.* family.
 	// An mpv Lua script (audio_reactive.lua) writes a smoothed 0..1 loudness
-	// envelope here at 20Hz while a video plays; this just reads whatever
-	// the latest value is, every frame, no throttling needed for a few
-	// bytes of text.
+	// envelope here at 20Hz while a video plays.
 	private static final File MPV_AUDIO_LEVEL_FILE =
 			new File("/data/data/com.termux.mpv/files/audio_level.txt");
 
@@ -59,8 +60,10 @@ final class BuiltinSystemUniforms {
 	private long lastBatteryUpdate;
 	private long lastDateUpdate;
 	private long lastMediaVolumeUpdate;
+	private long lastMpvAudioLevelUpdate;
 	private float batteryLevel;
 	private float mediaVolumeLevel;
+	private float mpvAudioLevelValue;
 
 	BuiltinSystemUniforms(@NonNull Context context) {
 		this.context = context;
@@ -72,6 +75,7 @@ final class BuiltinSystemUniforms {
 		lastBatteryUpdate = 0L;
 		lastDateUpdate = 0L;
 		lastMediaVolumeUpdate = 0L;
+		lastMpvAudioLevelUpdate = 0L;
 		hasNightMode = device.hasUniform(program, ShaderRenderer.UNIFORM_NIGHT_MODE);
 		hasNotificationCount = device.hasUniform(
 				program,
@@ -187,9 +191,13 @@ final class BuiltinSystemUniforms {
 					micInputListener.getAmplitude());
 		}
 		if (hasMpvAudioLevel) {
+			if (now - lastMpvAudioLevelUpdate > MPV_AUDIO_LEVEL_UPDATE_INTERVAL) {
+				mpvAudioLevelValue = readMpvAudioLevel();
+				lastMpvAudioLevelUpdate = now;
+			}
 			bindings.setFloat(
 					ShaderRenderer.UNIFORM_MPV_AUDIO_LEVEL,
-					readMpvAudioLevel());
+					mpvAudioLevelValue);
 		}
 	}
 
