@@ -65,6 +65,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public static final String UNIFORM_TIME = "time";
 	public static final String UNIFORM_MEDIA_VOLUME = "mediaVolume";
 	public static final String UNIFORM_MIC_AMPLITUDE = "micAmplitude";
+	public static final String UNIFORM_MPV_AUDIO_LEVEL = "mpvAudioLevel";
 	public static final String UNIFORM_TOUCH = "touch";
 	public static final String UNIFORM_TOUCH_START = "touchStart";
 

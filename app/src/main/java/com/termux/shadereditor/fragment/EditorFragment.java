@@ -108,10 +108,13 @@ public class EditorFragment extends Fragment {
 	}
 
 	public boolean hasErrors() {
-		return shaderEditor.hasErrors();
+		return shaderEditor != null && shaderEditor.hasErrors();
 	}
 
 	public void clearError() {
+		if (shaderEditor == null) {
+			return;
+		}
 		shaderEditor.setErrors(Collections.emptyList());
 	}
 
@@ -124,6 +127,15 @@ public class EditorFragment extends Fragment {
 	}
 
 	public void setErrors(@NonNull List<ShaderError> errors) {
+		if (shaderEditor == null) {
+			// The GL renderer's first compile can fire (and get posted to the
+			// UI thread) before this fragment's view is inflated — the
+			// fragment transaction that adds it isn't necessarily synchronous
+			// within Activity.onCreate(). Nothing to show errors on yet, and
+			// there's nothing to catch up on: the shader will simply be
+			// recompiled once the view (and its GL surface) actually exists.
+			return;
+		}
 		shaderEditor.setErrors(errors);
 		highlightErrors();
 	}

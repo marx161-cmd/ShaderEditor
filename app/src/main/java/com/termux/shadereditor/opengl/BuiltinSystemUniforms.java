@@ -14,6 +14,9 @@ import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.util.Calendar;
 
 import com.termux.shadereditor.app.ShaderEditorApp;
@@ -24,6 +27,16 @@ final class BuiltinSystemUniforms {
 	private static final long BATTERY_UPDATE_INTERVAL = 10000000000L;
 	private static final long DATE_UPDATE_INTERVAL = 1000000000L;
 	private static final long MEDIA_VOLUME_UPDATE_INTERVAL = 1000000000L;
+
+	// com.termux.mpv shares this app's UID (android.uid.system), so its
+	// private app data is directly readable here — no IPC, no permission,
+	// same "zero sandbox" pattern as the rest of the com.termux.* family.
+	// An mpv Lua script (audio_reactive.lua) writes a smoothed 0..1 loudness
+	// envelope here at 20Hz while a video plays; this just reads whatever
+	// the latest value is, every frame, no throttling needed for a few
+	// bytes of text.
+	private static final File MPV_AUDIO_LEVEL_FILE =
+			new File("/data/data/com.termux.mpv/files/audio_level.txt");
 
 	private final float[] daytime = new float[]{0, 0, 0};
 	private final float[] dateTime = new float[]{0, 0, 0, 0};
@@ -41,6 +54,7 @@ final class BuiltinSystemUniforms {
 	private boolean hasDaytime;
 	private boolean hasMediaVolume;
 	private boolean hasMicAmplitude;
+	private boolean hasMpvAudioLevel;
 	private int nightMode;
 	private long lastBatteryUpdate;
 	private long lastDateUpdate;
@@ -77,6 +91,9 @@ final class BuiltinSystemUniforms {
 		hasMicAmplitude = device.hasUniform(
 				program,
 				ShaderRenderer.UNIFORM_MIC_AMPLITUDE);
+		hasMpvAudioLevel = device.hasUniform(
+				program,
+				ShaderRenderer.UNIFORM_MPV_AUDIO_LEVEL);
 
 		if (hasNightMode) {
 			nightMode = (context.getResources().getConfiguration().uiMode &
@@ -169,6 +186,11 @@ final class BuiltinSystemUniforms {
 					ShaderRenderer.UNIFORM_MIC_AMPLITUDE,
 					micInputListener.getAmplitude());
 		}
+		if (hasMpvAudioLevel) {
+			bindings.setFloat(
+					ShaderRenderer.UNIFORM_MPV_AUDIO_LEVEL,
+					readMpvAudioLevel());
+		}
 	}
 
 	void release() {
@@ -216,6 +238,24 @@ final class BuiltinSystemUniforms {
 				-1);
 
 		return (float) level / scale;
+	}
+
+	private static float readMpvAudioLevel() {
+		if (!MPV_AUDIO_LEVEL_FILE.exists()) {
+			return 0f;
+		}
+		try (BufferedReader reader = new BufferedReader(
+				new FileReader(MPV_AUDIO_LEVEL_FILE))) {
+			String line = reader.readLine();
+			if (line == null) {
+				return 0f;
+			}
+			return Float.parseFloat(line.trim());
+		} catch (Exception e) {
+			// Missing/mid-write/mpv not running — not an error state, just
+			// means there's currently nothing to react to.
+			return 0f;
+		}
 	}
 
 	private static float getMediaVolumeLevel(@NonNull Context context) {
