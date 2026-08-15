@@ -27,17 +27,21 @@ final class BuiltinSystemUniforms {
 	private static final long BATTERY_UPDATE_INTERVAL = 10000000000L;
 	private static final long DATE_UPDATE_INTERVAL = 1000000000L;
 	private static final long MEDIA_VOLUME_UPDATE_INTERVAL = 1000000000L;
-	// Matches audio_reactive.lua's own 20Hz write rate — polling faster than
-	// the source updates just adds file-read overhead for no new data.
-	private static final long MPV_AUDIO_LEVEL_UPDATE_INTERVAL = 50000000L;
+	// Matches JDSP's reactive.lua tick rate — polling faster than the source
+	// updates just adds file-read overhead for no new data.
+	private static final long MPV_AUDIO_LEVEL_UPDATE_INTERVAL = 33333333L;  // ~30Hz, matches JDSP's reactive.lua tick()
 
-	// com.termux.mpv shares this app's UID (android.uid.system), so its
+	// com.termux.jdsp shares this app's UID (android.uid.system), so its
 	// private app data is directly readable here — no IPC, no permission,
 	// same "zero sandbox" pattern as the rest of the com.termux.* family.
-	// An mpv Lua script (audio_reactive.lua) writes a smoothed 0..1 loudness
-	// envelope here at 20Hz while a video plays.
-	private static final File MPV_AUDIO_LEVEL_FILE =
-			new File("/data/data/com.termux.mpv/files/audio_level.txt");
+	// JDSP's reactive.lua script (auto-loaded into the native engine, see
+	// project notes) writes a multi-line key=value bridge here at ~30Hz
+	// covering whatever audio the system is currently outputting — not tied
+	// to any one player app, unlike the old mpv-only version of this uniform.
+	// Kept reading the "mpvAudioLevel" uniform name itself unchanged so
+	// existing shaders don't silently break; only the driver moved.
+	private static final File JDSP_AUDIO_BRIDGE_FILE =
+			new File("/data/data/com.termux.jdsp/files/audio_bridge.txt");
 
 	private final float[] daytime = new float[]{0, 0, 0};
 	private final float[] dateTime = new float[]{0, 0, 0, 0};
@@ -249,19 +253,25 @@ final class BuiltinSystemUniforms {
 	}
 
 	private static float readMpvAudioLevel() {
-		if (!MPV_AUDIO_LEVEL_FILE.exists()) {
+		if (!JDSP_AUDIO_BRIDGE_FILE.exists()) {
 			return 0f;
 		}
+		// Multi-line key=value bridge (audio_level/audio_mood/audio_peak) —
+		// only audio_level feeds this uniform for now; the other two fields
+		// are available in the same file if a future uniform wants them.
 		try (BufferedReader reader = new BufferedReader(
-				new FileReader(MPV_AUDIO_LEVEL_FILE))) {
-			String line = reader.readLine();
-			if (line == null) {
-				return 0f;
+				new FileReader(JDSP_AUDIO_BRIDGE_FILE))) {
+			String line;
+			while ((line = reader.readLine()) != null) {
+				if (line.startsWith("audio_level=")) {
+					return Float.parseFloat(line.substring(12).trim());
+				}
 			}
-			return Float.parseFloat(line.trim());
+			return 0f;
 		} catch (Exception e) {
-			// Missing/mid-write/mpv not running — not an error state, just
-			// means there's currently nothing to react to.
+			// Missing/mid-write/JDSP not running (e.g. disabled to save
+			// battery) — not an error state, just means there's currently
+			// nothing to react to, which is the correct fallback appearance.
 			return 0f;
 		}
 	}
