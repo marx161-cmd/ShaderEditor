@@ -76,6 +76,7 @@ public class Preferences {
 	private boolean saveOnRun = true;
 	private boolean batteryLow = false;
 	private boolean powerConnected = false;
+	private boolean screenLocked = false;
 	private int systemBarColor;
 	private long defaultNewShaderId = 0;
 	private long lastOpenedShaderId = 0;
@@ -340,6 +341,14 @@ public class Preferences {
 
 	public void setPowerConnected(boolean isConnected) {
 		powerConnected = isConnected;
+	}
+
+	public boolean isScreenLocked() {
+		return screenLocked;
+	}
+
+	public void setScreenLocked(boolean isLocked) {
+		screenLocked = isLocked;
 	}
 
 	public boolean disableHighlighting() {

@@ -29,6 +29,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	public static final String UNIFORM_BACKBUFFER = "backbuffer";
 	public static final String UNIFORM_BATTERY = "battery";
+	public static final String UNIFORM_BATTERY_TEMP = "batteryTemp";
 	public static final String UNIFORM_CAMERA_ADDENT = "cameraAddent";
 	public static final String UNIFORM_CAMERA_BACK = "cameraBack";
 	public static final String UNIFORM_CAMERA_FRONT = "cameraFront";
@@ -59,6 +60,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public static final String UNIFORM_RESOLUTION = "resolution";
 	public static final String UNIFORM_ROTATION_MATRIX = "rotationMatrix";
 	public static final String UNIFORM_ROTATION_VECTOR = "rotationVector";
+	public static final String UNIFORM_SCREEN_LOCKED = "screenLocked";
 	public static final String UNIFORM_SECOND = "second";
 	public static final String UNIFORM_START_RANDOM = "startRandom";
 	public static final String UNIFORM_SUB_SECOND = "subsecond";

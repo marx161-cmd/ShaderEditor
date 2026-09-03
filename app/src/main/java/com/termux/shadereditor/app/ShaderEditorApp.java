@@ -1,6 +1,8 @@
 package com.termux.shadereditor.app;
 
 import android.app.Application;
+import android.app.KeyguardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
@@ -10,6 +12,7 @@ import com.termux.shadereditor.BuildConfig;
 import com.termux.shadereditor.database.Database;
 import com.termux.shadereditor.preference.Preferences;
 import com.termux.shadereditor.receiver.BatteryLevelReceiver;
+import com.termux.shadereditor.receiver.ScreenLockReceiver;
 import com.termux.shadereditor.view.UndoRedo;
 
 public class ShaderEditorApp extends Application {
@@ -17,6 +20,7 @@ public class ShaderEditorApp extends Application {
 	public static final UndoRedo.EditHistory editHistory = new UndoRedo.EditHistory();
 
 	private static final BatteryLevelReceiver batteryLevelReceiver = new BatteryLevelReceiver();
+	private static final ScreenLockReceiver screenLockReceiver = new ScreenLockReceiver();
 
 	@Override
 	public void onCreate() {
@@ -45,6 +49,7 @@ public class ShaderEditorApp extends Application {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
 			registerBatteryReceiver();
 		}
+		registerScreenLockReceiver();
 	}
 
 	private void registerBatteryReceiver() {
@@ -55,5 +60,21 @@ public class ShaderEditorApp extends Application {
 		registerReceiver(batteryLevelReceiver, filter);
 		// Note it's not required to unregister the receiver because it
 		// needs to be there as long as this application is running.
+	}
+
+	private void registerScreenLockReceiver() {
+		// Seed the initial state — SCREEN_OFF/USER_PRESENT only fire on
+		// future transitions, not for "already locked when the app/engine
+		// starts" (e.g. wallpaper engine created while the device is
+		// already sitting on the lock screen).
+		KeyguardManager keyguardManager =
+				(KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+		preferences.setScreenLocked(
+				keyguardManager != null && keyguardManager.isKeyguardLocked());
+
+		IntentFilter filter = new IntentFilter();
+		filter.addAction(Intent.ACTION_SCREEN_OFF);
+		filter.addAction(Intent.ACTION_USER_PRESENT);
+		registerReceiver(screenLockReceiver, filter);
 	}
 }

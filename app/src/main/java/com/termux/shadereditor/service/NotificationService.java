@@ -22,13 +22,38 @@ public class NotificationService extends NotificationListenerService {
 
 	@Override
 	public synchronized void onNotificationPosted(StatusBarNotification sbn) {
-		counter = getActiveNotifications().length;
+		StatusBarNotification[] notifications = activeNotificationsOrNull();
+		if (notifications == null) {
+			return;
+		}
+		counter = notifications.length;
 		lastNotificationTime = sbn.getPostTime();
 	}
 
 	@Override
 	public synchronized void onNotificationRemoved(StatusBarNotification sbn) {
-		counter = getActiveNotifications().length;
+		StatusBarNotification[] notifications = activeNotificationsOrNull();
+		if (notifications == null) {
+			return;
+		}
+		counter = notifications.length;
+	}
+
+	// getActiveNotifications() can throw SecurityException ("Disallowed call
+	// from unknown notification listener") for a callback that arrives while
+	// the listener is mid-rebind (e.g. right after force-stop/ANR/toggling
+	// notification access) — the system hasn't finished re-registering this
+	// binder instance's token yet. A known, documented NotificationListenerService
+	// race, not a real error: skip this update, the next post/remove/
+	// onListenerConnected() call will resync counter/lastNotificationTime
+	// correctly once the rebind completes.
+	@Nullable
+	private StatusBarNotification[] activeNotificationsOrNull() {
+		try {
+			return getActiveNotifications();
+		} catch (SecurityException e) {
+			return null;
+		}
 	}
 
 	@Override
@@ -44,7 +69,10 @@ public class NotificationService extends NotificationListenerService {
 
 	private void invalidate() {
 		requirePermissions(this);
-		StatusBarNotification[] notifications = getActiveNotifications();
+		StatusBarNotification[] notifications = activeNotificationsOrNull();
+		if (notifications == null) {
+			return;
+		}
 		Long lastTime;
 		synchronized (this) {
 			counter = notifications.length;
