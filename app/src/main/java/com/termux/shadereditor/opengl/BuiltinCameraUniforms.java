@@ -12,6 +12,8 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
 
+import java.util.List;
+
 import com.termux.shadereditor.hardware.CameraListener;
 
 final class BuiltinCameraUniforms {
@@ -35,13 +37,15 @@ final class BuiltinCameraUniforms {
 
 	void configure(
 			@NonNull GlDevice device,
-			@NonNull GlProgram program,
+			@NonNull List<GlProgram> programs,
 			@NonNull ShaderTextureResources textureResources) {
-		hasCameraOrientation = device.hasUniform(
-				program,
+		hasCameraOrientation = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_CAMERA_ORIENTATION);
-		hasCameraAddent = device.hasUniform(
-				program,
+		hasCameraAddent = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_CAMERA_ADDENT);
 		cameraTextureBinding = textureResources.getFirstBinding(
 				ShaderRenderer.UNIFORM_CAMERA_BACK,
@@ -54,6 +58,18 @@ final class BuiltinCameraUniforms {
 		this.renderHeight = renderHeight;
 		this.deviceRotation = deviceRotation;
 		openCameraIfNeeded();
+	}
+
+	// Advances the camera stream once per frame. Called exactly once per
+	// frame even in multi-pass mode, so the stream isn't stepped N times.
+	void updateFrame() {
+		if (cameraListener == null) {
+			return;
+		}
+		cameraListener.update();
+		if (cameraTextureBinding != null && cameraTextureBinding.texture() != null) {
+			cameraTextureBinding.texture().markBindingDirty();
+		}
 	}
 
 	void apply(@NonNull ProgramBindings bindings) {
@@ -75,10 +91,6 @@ final class BuiltinCameraUniforms {
 			bindings.setFloat2(
 					ShaderRenderer.UNIFORM_CAMERA_ADDENT,
 					cameraListener.addent);
-		}
-		cameraListener.update();
-		if (cameraTextureBinding != null && cameraTextureBinding.texture() != null) {
-			cameraTextureBinding.texture().markBindingDirty();
 		}
 	}
 
@@ -139,5 +151,17 @@ final class BuiltinCameraUniforms {
 				activity,
 				new String[]{permission},
 				1);
+	}
+
+	private static boolean anyHasUniform(
+			@NonNull GlDevice device,
+			@NonNull List<GlProgram> programs,
+			@NonNull String name) {
+		for (GlProgram program : programs) {
+			if (device.hasUniform(program, name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

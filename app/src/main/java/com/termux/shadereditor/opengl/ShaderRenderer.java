@@ -98,6 +98,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	private volatile float samples;
 	private volatile int lastFps;
 	private volatile float refreshRate = DEFAULT_REFRESH_RATE;
+	private float quality = 1f;
 
 	public ShaderRenderer(Context context) {
 		this.context = context;
@@ -115,6 +116,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	}
 
 	public void setQuality(float quality) {
+		this.quality = quality;
 		builtinUniforms.setQuality(quality);
 	}
 
@@ -142,11 +144,20 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			submitErrors(reloadResult.textureErrors());
 			if (reloadResult.succeeded()) {
 				submitErrors(Collections.emptyList());
+				List<GlProgram> programs;
+				if (programManager.isMultipass()) {
+					programs = programManager.getPassPrograms().stream()
+							.map(RendererProgramManager.PassProgram::program)
+							.toList();
+				} else {
+					programs = List.of(programManager.getMainProgram());
+				}
 				builtinUniforms.configure(
 						device,
-						programManager.getMainProgram(),
+						programs,
 						programManager.getFTimeMax(),
-						programManager.getTextureResources());
+						programManager.getTextureResources(),
+						programManager.isMultipass());
 			} else if (!reloadResult.programErrors().isEmpty()) {
 				submitErrors(reloadResult.programErrors());
 			}
@@ -161,6 +172,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		surfaceState = builtinUniforms.updateSurface(width, height, now);
 		if (surfaceState.renderTargetsChanged()) {
 			renderPipeline.releaseTargets();
+			renderPipeline.releaseMultipassTargets();
 		}
 
 		resetFps();
@@ -168,6 +180,14 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	@Override
 	public void onDrawFrame(GL10 gl) {
+		if (programManager.isMultipass()) {
+			renderMultipassFrame();
+		} else {
+			renderSinglePassFrame();
+		}
+	}
+
+	private void renderSinglePassFrame() {
 		var surfaceProgram = programManager.getSurfaceProgram();
 		var mainProgram = programManager.getMainProgram();
 		var surfaceBindings = programManager.getSurfaceBindings();
@@ -203,7 +223,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			return;
 		}
 
-		renderPipeline.renderMainPass(frame.bindings(), mainProgram);
+		renderPipeline.renderMainPass(frame.bindings().get(0), mainProgram);
 		renderPipeline.renderSurfacePass(
 				surfaceBindings,
 				surfaceProgram,
@@ -211,6 +231,59 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 				frame.surfaceHeight());
 		renderPipeline.swapTargets();
 		captureThumbnail();
+
+		if (onRendererListener != null) {
+			updateFps(frame.now());
+		}
+
+		builtinUniforms.endFrame();
+	}
+
+	private void renderMultipassFrame() {
+		var passes = programManager.getPassPrograms();
+		if (passes.isEmpty()) {
+			device.clear(GLES20.GL_COLOR_BUFFER_BIT |
+					GLES20.GL_DEPTH_BUFFER_BIT);
+			cancelCaptureThumbnail();
+			return;
+		}
+
+		var frame = builtinUniforms.beginFrame(null);
+		if (frame == null) {
+			device.clear(GLES20.GL_COLOR_BUFFER_BIT |
+					GLES20.GL_DEPTH_BUFFER_BIT);
+			cancelCaptureThumbnail();
+			return;
+		}
+
+		int surfaceWidth = frame.surfaceWidth();
+		int surfaceHeight = frame.surfaceHeight();
+
+		if (!renderPipeline.hasMultipassTargets()) {
+			boolean gles3 = programManager.isGles3();
+			boolean halfFloat = device.supportsHalfFloatColorBuffer(gles3);
+			var targetErrors = renderPipeline.ensureMultipassTargets(
+					passes,
+					surfaceWidth,
+					surfaceHeight,
+					quality,
+					halfFloat,
+					gles3);
+			if (!targetErrors.isEmpty()) {
+				submitErrors(targetErrors);
+			}
+			if (!renderPipeline.hasMultipassTargets()) {
+				cancelCaptureThumbnail();
+				return;
+			}
+		}
+
+		renderPipeline.renderMultipass(
+				frame.bindings(),
+				passes,
+				surfaceWidth,
+				surfaceHeight);
+		captureMultipassThumbnail(frame.bindings());
 
 		if (onRendererListener != null) {
 			updateFps(frame.now());
@@ -274,6 +347,18 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 				thumbnail = renderPipeline.captureThumbnail(
 						surfaceBindings,
 						surfaceProgram);
+				captureThumbnail = false;
+				thumbnailLock.notifyAll();
+			}
+		}
+	}
+
+	private void captureMultipassThumbnail(@NonNull List<ProgramBindings> bindings) {
+		synchronized (thumbnailLock) {
+			if (captureThumbnail) {
+				thumbnail = renderPipeline.captureMultipassThumbnail(
+						bindings,
+						programManager.getPassPrograms());
 				captureThumbnail = false;
 				thumbnailLock.notifyAll();
 			}

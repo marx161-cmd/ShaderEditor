@@ -3,6 +3,7 @@ package com.termux.shadereditor.opengl;
 import android.graphics.Bitmap;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.opengl.GLES30;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -18,6 +19,14 @@ import javax.microedition.khronos.opengles.GL11ExtensionPack;
 import com.termux.shadereditor.graphics.BitmapEditor;
 
 final class GlDevice {
+	// GL_HALF_FLOAT_OES is not exposed by android.opengl.GLES20/30, so define
+	// it here (matches the ES2 EXT_color_buffer_half_float type).
+	private static final int GL_HALF_FLOAT_OES = 0x8D61;
+	private static final String EXT_COLOR_BUFFER_HALF_FLOAT =
+			"GL_EXT_color_buffer_half_float";
+	private static final String EXT_COLOR_BUFFER_FLOAT =
+			"GL_EXT_color_buffer_float";
+
 	private static final int[] CUBE_MAP_TARGETS = {
 			GL11ExtensionPack.GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
 			GL11ExtensionPack.GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
@@ -156,18 +165,84 @@ final class GlDevice {
 	}
 
 	void allocateTexture2D(@NonNull GlTexture2D texture, int width, int height) {
+		allocateTexture2D(
+				texture,
+				width,
+				height,
+				GLES20.GL_RGBA,
+				GLES20.GL_UNSIGNED_BYTE);
+	}
+
+	// RGBA16F so multi-pass buffers can hold values > 1.0 without clipping
+	// (HDR/glow accumulation). Internal format is version-dependent:
+	// GLES3 uses GL_RGBA16F + GL_HALF_FLOAT, ES2 falls back to GL_RGBA +
+	// GL_HALF_FLOAT_OES. Callers must only call this when
+	// supportsHalfFloatColorBuffer(version) is true.
+	void allocateTexture2DHalfFloat(
+			@NonNull GlTexture2D texture,
+			int width,
+			int height,
+			boolean gles3) {
+		if (gles3) {
+			allocateTexture2D(
+					texture,
+					width,
+					height,
+					GLES30.GL_RGBA16F,
+					GLES30.GL_HALF_FLOAT);
+		} else {
+			allocateTexture2D(
+					texture,
+					width,
+					height,
+					GLES20.GL_RGBA,
+					GL_HALF_FLOAT_OES);
+		}
+	}
+
+	boolean supportsHalfFloatColorBuffer(boolean gles3) {
+		if (gles3) {
+			return hasExtension(EXT_COLOR_BUFFER_FLOAT) ||
+					hasExtension(EXT_COLOR_BUFFER_HALF_FLOAT);
+		}
+		return hasExtension(EXT_COLOR_BUFFER_HALF_FLOAT);
+	}
+
+	private void allocateTexture2D(
+			@NonNull GlTexture2D texture,
+			int width,
+			int height,
+			int internalFormat,
+			int type) {
 		bindTexture(0, texture);
 		GLES20.glTexImage2D(
 				GLES20.GL_TEXTURE_2D,
 				0,
-				GLES20.GL_RGBA,
+				internalFormat,
 				width,
 				height,
 				0,
 				GLES20.GL_RGBA,
-				GLES20.GL_UNSIGNED_BYTE,
+				type,
 				null);
 		texture.setSize(width, height);
+	}
+
+	private boolean hasExtension(@NonNull String extension) {
+		String extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS);
+		if (extensions != null) {
+			return extensions.contains(extension);
+		}
+		// ES3 core profiles return null for GL_EXTENSIONS; enumerate instead.
+		int[] count = new int[1];
+		GLES30.glGetIntegerv(GLES30.GL_NUM_EXTENSIONS, count, 0);
+		for (int i = 0; i < count[0]; ++i) {
+			String ext = GLES30.glGetStringi(GLES30.GL_EXTENSIONS, i);
+			if (extension.equals(ext)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Nullable

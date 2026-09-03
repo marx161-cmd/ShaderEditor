@@ -19,6 +19,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.util.Calendar;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.termux.shadereditor.app.ShaderEditorApp;
@@ -113,43 +114,67 @@ final class BuiltinSystemUniforms {
 
 	void configure(
 			@NonNull GlDevice device,
-			@NonNull GlProgram program) {
+			@NonNull List<GlProgram> programs) {
 		lastBatteryUpdate = 0L;
 		lastBatteryTempUpdate = 0L;
 		lastDateUpdate = 0L;
 		lastMediaVolumeUpdate = 0L;
 		lastMpvAudioLevelUpdate = 0L;
 		lastBridgeUpdate = 0L;
-		hasNightMode = device.hasUniform(program, ShaderRenderer.UNIFORM_NIGHT_MODE);
-		hasNotificationCount = device.hasUniform(
-				program,
+		hasNightMode = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_NIGHT_MODE);
+		hasNotificationCount = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_NOTIFICATION_COUNT);
-		hasLastNotificationTime = device.hasUniform(
-				program,
+		hasLastNotificationTime = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_LAST_NOTIFICATION_TIME);
-		hasBattery = device.hasUniform(program, ShaderRenderer.UNIFORM_BATTERY);
-		hasBatteryTemp = device.hasUniform(program, ShaderRenderer.UNIFORM_BATTERY_TEMP);
-		hasPowerConnected = device.hasUniform(
-				program,
+		hasBattery = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_BATTERY);
+		hasBatteryTemp = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_BATTERY_TEMP);
+		hasPowerConnected = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_POWER_CONNECTED);
-		hasDate = device.hasUniform(program, ShaderRenderer.UNIFORM_DATE);
-		hasDaytime = device.hasUniform(program, ShaderRenderer.UNIFORM_DAYTIME);
-		hasMediaVolume = device.hasUniform(
-				program,
+		hasDate = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_DATE);
+		hasDaytime = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_DAYTIME);
+		hasMediaVolume = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_MEDIA_VOLUME);
-		hasMicAmplitude = device.hasUniform(
-				program,
+		hasMicAmplitude = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_MIC_AMPLITUDE);
-		hasMpvAudioLevel = device.hasUniform(
-				program,
+		hasMpvAudioLevel = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_MPV_AUDIO_LEVEL);
-		hasScreenLocked = device.hasUniform(
-				program,
+		hasScreenLocked = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_SCREEN_LOCKED);
 
 		bridgeUniformPresence.clear();
 		for (String key : readAudioBridge().keySet()) {
-			bridgeUniformPresence.put(key, device.hasUniform(program, key));
+			bridgeUniformPresence.put(
+					key,
+					anyHasUniform(device, programs, key));
 		}
 
 		if (hasNightMode) {
@@ -440,5 +465,17 @@ final class BuiltinSystemUniforms {
 			return 0;
 		}
 		return currentVolume / maxVolume;
+	}
+
+	private static boolean anyHasUniform(
+			@NonNull GlDevice device,
+			@NonNull List<GlProgram> programs,
+			@NonNull String name) {
+		for (GlProgram program : programs) {
+			if (device.hasUniform(program, name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

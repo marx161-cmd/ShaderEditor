@@ -5,6 +5,7 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 final class RendererProgramManager {
@@ -26,6 +27,15 @@ final class RendererProgramManager {
 					List.copyOf(programErrors),
 					false);
 		}
+	}
+
+	record PassProgram(
+			@NonNull String name,
+			boolean isImage,
+			float scale,
+			int updateRate,
+			@NonNull GlProgram program,
+			@NonNull ProgramBindings bindings) {
 	}
 
 	private static final String FULL_SCREEN_VERTEX_SHADER = """
@@ -70,6 +80,8 @@ final class RendererProgramManager {
 	private GlProgram mainProgram;
 	@Nullable
 	private ProgramBindings surfaceBindings;
+	@NonNull
+	private List<PassProgram> passPrograms = List.of();
 
 	RendererProgramManager(int maxTextures) {
 		this.maxTextures = maxTextures;
@@ -86,8 +98,19 @@ final class RendererProgramManager {
 	}
 
 	boolean hasPreparedShader() {
+		if (preparedShaderSource.isMultipass()) {
+			return !preparedShaderSource.getSections().isEmpty();
+		}
 		var fragmentShader = preparedShaderSource.getFragmentShader();
 		return fragmentShader != null && !fragmentShader.getSource().isEmpty();
+	}
+
+	boolean isMultipass() {
+		return preparedShaderSource.isMultipass();
+	}
+
+	boolean isGles3() {
+		return version == 3;
 	}
 
 	@NonNull
@@ -95,6 +118,11 @@ final class RendererProgramManager {
 		clearPrograms();
 
 		var textureErrors = textureResources.load(context, device);
+
+		if (preparedShaderSource.isMultipass()) {
+			return reloadMultiPass(textureErrors, device);
+		}
+
 		var surfaceResult = device.createProgram(
 				FULL_SCREEN_VERTEX_SHADER,
 				SURFACE_FRAGMENT_SHADER,
@@ -127,6 +155,42 @@ final class RendererProgramManager {
 		return ReloadResult.success(textureErrors);
 	}
 
+	@NonNull
+	private ReloadResult reloadMultiPass(
+			@NonNull List<ShaderError> textureErrors,
+			@NonNull GlDevice device) {
+		String vertexShader = preparedShaderSource.getVertexShader(
+				FULL_SCREEN_VERTEX_SHADER,
+				FULL_SCREEN_VERTEX_SHADER_3,
+				version);
+
+		List<PassProgram> passes = new ArrayList<>();
+		List<ShaderError> programErrors = new ArrayList<>();
+		for (var section : preparedShaderSource.getSections()) {
+			var result = device.createProgram(
+					vertexShader,
+					section.fragmentShader().getSource(),
+					section.fragmentShader().getLineMapping());
+			if (!result.succeeded() || result.getProgram() == null) {
+				programErrors.addAll(result.getInfoLog());
+				for (var pass : passes) {
+					device.deleteProgram(pass.program());
+				}
+				return ReloadResult.failure(textureErrors, programErrors);
+			}
+			passes.add(new PassProgram(
+					section.name(),
+					section.isImage(),
+					section.scale(),
+					section.updateRate(),
+					result.getProgram(),
+					new ProgramBindings(result.getProgram())));
+		}
+
+		passPrograms = List.copyOf(passes);
+		return ReloadResult.success(textureErrors);
+	}
+
 	void discardContextResources() {
 		clearPrograms();
 		textureResources.discard();
@@ -145,6 +209,11 @@ final class RendererProgramManager {
 	@Nullable
 	ProgramBindings getSurfaceBindings() {
 		return surfaceBindings;
+	}
+
+	@NonNull
+	List<PassProgram> getPassPrograms() {
+		return passPrograms;
 	}
 
 	@NonNull
@@ -174,5 +243,6 @@ final class RendererProgramManager {
 		surfaceProgram = null;
 		mainProgram = null;
 		surfaceBindings = null;
+		passPrograms = List.of();
 	}
 }

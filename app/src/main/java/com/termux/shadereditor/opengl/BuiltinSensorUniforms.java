@@ -7,6 +7,8 @@ import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.util.List;
+
 import com.termux.shadereditor.hardware.AccelerometerListener;
 import com.termux.shadereditor.hardware.GravityListener;
 import com.termux.shadereditor.hardware.GyroscopeListener;
@@ -66,26 +68,33 @@ final class BuiltinSensorUniforms {
 
 	void configure(
 			@NonNull GlDevice device,
-			@NonNull GlProgram program) {
-		hasGravity = device.hasUniform(program, ShaderRenderer.UNIFORM_GRAVITY);
-		hasLinear = device.hasUniform(program, ShaderRenderer.UNIFORM_LINEAR);
-		hasGyroscope = device.hasUniform(program, ShaderRenderer.UNIFORM_GYROSCOPE);
-		hasMagnetic = device.hasUniform(program, ShaderRenderer.UNIFORM_MAGNETIC);
-		hasLight = device.hasUniform(program, ShaderRenderer.UNIFORM_LIGHT);
-		hasPressure = device.hasUniform(program, ShaderRenderer.UNIFORM_PRESSURE);
-		hasProximity = device.hasUniform(program, ShaderRenderer.UNIFORM_PROXIMITY);
-		hasRotationVector = device.hasUniform(
-				program,
+			@NonNull List<GlProgram> programs) {
+		hasGravity = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_GRAVITY);
+		hasLinear = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_LINEAR);
+		hasGyroscope = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_GYROSCOPE);
+		hasMagnetic = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_MAGNETIC);
+		hasLight = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_LIGHT);
+		hasPressure = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_PRESSURE);
+		hasProximity = anyHasUniform(device, programs, ShaderRenderer.UNIFORM_PROXIMITY);
+		hasRotationVector = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_ROTATION_VECTOR);
-		hasRotationMatrix = device.hasUniform(
-				program,
+		hasRotationMatrix = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_ROTATION_MATRIX);
-		hasOrientation = device.hasUniform(program, ShaderRenderer.UNIFORM_ORIENTATION);
-		hasInclinationMatrix = device.hasUniform(
-				program,
+		hasOrientation = anyHasUniform(
+				device,
+				programs,
+				ShaderRenderer.UNIFORM_ORIENTATION);
+		hasInclinationMatrix = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_INCLINATION_MATRIX);
-		hasInclination = device.hasUniform(
-				program,
+		hasInclination = anyHasUniform(
+				device,
+				programs,
 				ShaderRenderer.UNIFORM_INCLINATION);
 
 		if (needsGravitySource()) {
@@ -344,5 +353,17 @@ final class BuiltinSensorUniforms {
 			return null;
 		}
 		return accelerometerListener;
+	}
+
+	private static boolean anyHasUniform(
+			@NonNull GlDevice device,
+			@NonNull List<GlProgram> programs,
+			@NonNull String name) {
+		for (GlProgram program : programs) {
+			if (device.hasUniform(program, name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

@@ -7,6 +7,9 @@ import android.view.WindowManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
+
 final class BuiltinUniforms {
 	record SurfaceState(int renderWidth, int renderHeight, boolean renderTargetsChanged) {
 		@NonNull
@@ -16,7 +19,7 @@ final class BuiltinUniforms {
 	}
 
 	record PreparedFrame(
-			@NonNull ProgramBindings bindings,
+			@NonNull List<ProgramBindings> bindings,
 			int surfaceWidth,
 			int surfaceHeight,
 			long now) {
@@ -43,7 +46,8 @@ final class BuiltinUniforms {
 	private final BuiltinCameraUniforms cameraUniforms;
 
 	@Nullable
-	private ProgramBindings programBindings;
+	private List<ProgramBindings> programBindings;
+	private boolean multipass;
 	@NonNull
 	private ShaderTextureResources textureResources =
 			ShaderTextureResources.empty();
@@ -67,17 +71,24 @@ final class BuiltinUniforms {
 
 	void configure(
 			@NonNull GlDevice device,
-			@NonNull GlProgram program,
+			@NonNull List<GlProgram> programs,
 			float fTimeMax,
-			@NonNull ShaderTextureResources textureResources) {
+			@NonNull ShaderTextureResources textureResources,
+			boolean multipass) {
 		releaseModules();
 		this.fTimeMax = fTimeMax;
 		this.textureResources = textureResources;
-		programBindings = new ProgramBindings(program);
+		this.multipass = multipass;
 
-		sensorUniforms.configure(device, program);
-		systemUniforms.configure(device, program);
-		cameraUniforms.configure(device, program, textureResources);
+		List<ProgramBindings> bindings = new ArrayList<>(programs.size());
+		for (GlProgram program : programs) {
+			bindings.add(new ProgramBindings(program));
+		}
+		programBindings = bindings;
+
+		sensorUniforms.configure(device, programs);
+		systemUniforms.configure(device, programs);
+		cameraUniforms.configure(device, programs, textureResources);
 	}
 
 	@NonNull
@@ -108,14 +119,21 @@ final class BuiltinUniforms {
 	}
 
 	void updateTouch(@NonNull MotionEvent e) {
-		float x = e.getX() * quality;
-		float y = e.getY() * quality;
+		// Multi-pass passes may render at their own scale, so report input
+		// coordinates in surface space (1:1) and let each pass scale by its
+		// own resolution. Single-pass keeps the legacy quality-scaled space.
+		float scale = multipass ? 1f : quality;
+		float w = multipass ? surfaceResolution[0] : resolution[0];
+		float h = multipass ? surfaceResolution[1] : resolution[1];
+
+		float x = e.getX() * scale;
+		float y = e.getY() * scale;
 
 		touch[0] = x;
-		touch[1] = resolution[1] - y;
+		touch[1] = h - y;
 
-		mouse[0] = x / resolution[0];
-		mouse[1] = 1 - y / resolution[1];
+		mouse[0] = x / w;
+		mouse[1] = 1 - y / h;
 
 		switch (e.getActionMasked()) {
 			case MotionEvent.ACTION_DOWN:
@@ -132,8 +150,8 @@ final class BuiltinUniforms {
 
 		pointerCount = Math.min(e.getPointerCount(), pointers.length / 3);
 		for (int i = 0, pointerOffset = 0; i < pointerCount; ++i) {
-			pointers[pointerOffset++] = e.getX(i) * quality;
-			pointers[pointerOffset++] = resolution[1] - e.getY(i) * quality;
+			pointers[pointerOffset++] = e.getX(i) * scale;
+			pointers[pointerOffset++] = h - e.getY(i) * scale;
 			pointers[pointerOffset++] = e.getTouchMajor(i);
 		}
 	}
@@ -146,22 +164,29 @@ final class BuiltinUniforms {
 	@Nullable
 	PreparedFrame beginFrame(@Nullable GlTexture2D backBufferTexture) {
 		var bindings = programBindings;
-		if (bindings == null) {
+		if (bindings == null || bindings.isEmpty()) {
 			return null;
 		}
 
 		long now = System.nanoTime();
 		float delta = (now - startTime) / NS_PER_SECOND;
 
-		bindings.clear();
-		bindFrameUniforms(bindings, delta);
-		systemUniforms.apply(bindings, now);
-		sensorUniforms.apply(bindings);
-		if (backBufferTexture != null) {
-			bindings.setTexture(ShaderRenderer.UNIFORM_BACKBUFFER, backBufferTexture);
+		cameraUniforms.updateFrame();
+
+		for (ProgramBindings b : bindings) {
+			b.clear();
+			bindFrameUniforms(b, delta);
+			systemUniforms.apply(b, now);
+			sensorUniforms.apply(b);
+			cameraUniforms.apply(b);
+			textureResources.applyTo(b);
 		}
-		cameraUniforms.apply(bindings);
-		textureResources.applyTo(bindings);
+
+		if (backBufferTexture != null) {
+			bindings.get(0).setTexture(
+					ShaderRenderer.UNIFORM_BACKBUFFER,
+					backBufferTexture);
+		}
 
 		return new PreparedFrame(
 				bindings,
@@ -178,6 +203,7 @@ final class BuiltinUniforms {
 		fTimeMax = DEFAULT_FTIME_MAX;
 		textureResources = ShaderTextureResources.empty();
 		programBindings = null;
+		multipass = false;
 	}
 
 	void release() {

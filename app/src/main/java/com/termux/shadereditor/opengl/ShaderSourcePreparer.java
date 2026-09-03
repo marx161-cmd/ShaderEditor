@@ -7,7 +7,11 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -48,23 +52,137 @@ final class ShaderSourcePreparer {
 			int maxTextures) {
 		float fTimeMax = parseFTime(source);
 		if (source == null) {
-			return new PreparedShaderSource(
-					null,
-					fTimeMax,
-					null,
-					new BackBufferParameters(),
-					List.of());
+			return PreparedShaderSource.empty();
 		}
 
 		String gles3Version = getGLES3Version(source, version);
+		ShaderSectionParser.Parsed parsed = ShaderSectionParser.parse(source);
+		if (parsed.isMultipass()) {
+			return prepareMultiPass(
+					parsed,
+					gles3Version,
+					fTimeMax,
+					maxTextures);
+		}
+		return prepareSinglePass(
+				source,
+				gles3Version,
+				fTimeMax,
+				maxTextures);
+	}
+
+	@NonNull
+	private static PreparedShaderSource prepareSinglePass(
+			@NonNull String source,
+			@Nullable String gles3Version,
+			float fTimeMax,
+			int maxTextures) {
 		PreparedShaderInput preparedInput = new PreparedShaderInput(
 				source,
 				ShaderLineMapping.identity());
 		BackBufferParameters backBufferParameters = new BackBufferParameters();
 		ArrayList<DiscoveredSampler> samplers = new ArrayList<>();
 
+		preparedInput = scanSamplers(
+				source,
+				gles3Version,
+				preparedInput,
+				null,
+				backBufferParameters,
+				samplers,
+				maxTextures);
+
+		if (!preparedInput.getSource().contains(SHADER_EDITOR)) {
+			preparedInput = addPreprocessorDirective(preparedInput, SHADER_EDITOR);
+		}
+
+		return PreparedShaderSource.singlePass(
+				preparedInput,
+				fTimeMax,
+				gles3Version,
+				backBufferParameters,
+				samplers);
+	}
+
+	@NonNull
+	private static PreparedShaderSource prepareMultiPass(
+			@NonNull ShaderSectionParser.Parsed parsed,
+			@Nullable String gles3Version,
+			float fTimeMax,
+			int maxTextures) {
+		String preamble = parsed.preamble();
+		int preambleLines = preamble.isEmpty()
+				? 0
+				: countNewlines(preamble);
+
+		Set<String> excludedNames = new HashSet<>();
+		for (ShaderSectionParser.Section section : parsed.sections()) {
+			if (!section.isImage()) {
+				excludedNames.add(section.name());
+			}
+		}
+		excludedNames.add(ShaderRenderer.UNIFORM_BACKBUFFER);
+
+		Map<String, DiscoveredSampler> userSamplers = new LinkedHashMap<>();
+		List<PreparedShaderSource.PreparedSection> sections = new ArrayList<>();
+
+		for (ShaderSectionParser.Section section : parsed.sections()) {
+			String compiledSource = preamble + section.body();
+			ShaderLineMapping lineMapping = ShaderLineMapping.identity()
+					.withSectionOffset(
+							preambleLines,
+							section.delimiterLine() - preambleLines);
+			PreparedShaderInput input = new PreparedShaderInput(
+					compiledSource,
+					lineMapping);
+
+			ArrayList<DiscoveredSampler> sectionSamplers = new ArrayList<>();
+			input = scanSamplers(
+					compiledSource,
+					gles3Version,
+					input,
+					excludedNames,
+					null,
+					sectionSamplers,
+					maxTextures);
+
+			if (!input.getSource().contains(SHADER_EDITOR)) {
+				input = addPreprocessorDirective(input, SHADER_EDITOR);
+			}
+
+			for (DiscoveredSampler sampler : sectionSamplers) {
+				if (userSamplers.size() < maxTextures) {
+					userSamplers.putIfAbsent(sampler.name(), sampler);
+				}
+			}
+
+			sections.add(new PreparedShaderSource.PreparedSection(
+					section.name(),
+					section.isImage(),
+					section.scale(),
+					section.updateRate(),
+					input,
+					sectionSamplers));
+		}
+
+		return PreparedShaderSource.multiPass(
+				fTimeMax,
+				gles3Version,
+				sections,
+				new ArrayList<>(userSamplers.values()));
+	}
+
+	@NonNull
+	private static PreparedShaderInput scanSamplers(
+			@NonNull String source,
+			@Nullable String gles3Version,
+			@NonNull PreparedShaderInput preparedInput,
+			@Nullable Set<String> excludedNames,
+			@Nullable BackBufferParameters backBufferParameters,
+			@NonNull List<DiscoveredSampler> outSamplers,
+			int maxTextures) {
 		for (Matcher matcher = PATTERN_SAMPLER.matcher(source);
-				matcher.find() && samplers.size() < maxTextures; ) {
+				matcher.find() && outSamplers.size() < maxTextures; ) {
 			String type = matcher.group(1);
 			String name = matcher.group(2);
 			String params = matcher.group(3);
@@ -73,45 +191,51 @@ final class ShaderSourcePreparer {
 				continue;
 			}
 
-			if (ShaderRenderer.UNIFORM_BACKBUFFER.equals(name)) {
+			if (backBufferParameters != null &&
+					ShaderRenderer.UNIFORM_BACKBUFFER.equals(name)) {
 				backBufferParameters.parse(params);
 				continue;
 			}
 
-			int target = switch (type) {
-				case SAMPLER_2D -> GLES20.GL_TEXTURE_2D;
-				case SAMPLER_CUBE -> GLES20.GL_TEXTURE_CUBE_MAP;
-				case SAMPLER_EXTERNAL_OES -> {
-					String pattern = gles3Version != null
-							? OES_EXTERNAL_ESS3
-							: OES_EXTERNAL;
-					if (!preparedInput.getSource().contains(pattern)) {
-						preparedInput = addPreprocessorDirective(preparedInput, pattern);
-					}
-					yield GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
-				}
-				default -> -1;
-			};
-			if (target < 0) {
+			if (excludedNames != null && excludedNames.contains(name)) {
 				continue;
 			}
 
-			samplers.add(new DiscoveredSampler(
+			int target;
+			boolean external = false;
+			switch (type) {
+				case SAMPLER_2D:
+					target = GLES20.GL_TEXTURE_2D;
+					break;
+				case SAMPLER_CUBE:
+					target = GLES20.GL_TEXTURE_CUBE_MAP;
+					break;
+				case SAMPLER_EXTERNAL_OES:
+					target = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
+					external = true;
+					break;
+				default:
+					target = -1;
+					break;
+			}
+			if (target < 0) {
+				continue;
+			}
+			if (external) {
+				String pattern = gles3Version != null
+						? OES_EXTERNAL_ESS3
+						: OES_EXTERNAL;
+				if (!preparedInput.getSource().contains(pattern)) {
+					preparedInput = addPreprocessorDirective(preparedInput, pattern);
+				}
+			}
+
+			outSamplers.add(new DiscoveredSampler(
 					name,
 					target,
 					new TextureParameters(params)));
 		}
-
-		if (!preparedInput.getSource().contains(SHADER_EDITOR)) {
-			preparedInput = addPreprocessorDirective(preparedInput, SHADER_EDITOR);
-		}
-
-		return new PreparedShaderSource(
-				preparedInput,
-				fTimeMax,
-				gles3Version,
-				backBufferParameters,
-				samplers);
+		return preparedInput;
 	}
 
 	private static float parseFTime(@Nullable String source) {
@@ -163,6 +287,16 @@ final class ShaderSourcePreparer {
 	private static int countSourceLines(@NonNull String source, int endExclusive) {
 		int lines = 0;
 		for (int index = 0; index < endExclusive; ++index) {
+			if (source.charAt(index) == '\n') {
+				++lines;
+			}
+		}
+		return lines;
+	}
+
+	private static int countNewlines(@NonNull String source) {
+		int lines = 0;
+		for (int index = 0; index < source.length(); ++index) {
 			if (source.charAt(index) == '\n') {
 				++lines;
 			}
