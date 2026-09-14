@@ -260,6 +260,43 @@ final class GlDevice {
 		return message;
 	}
 
+	// Uploads raw float32 data as a single-channel R32F texture (GLES 3.0).
+	// Used for the JDSP 108-band audio bridge: one texel per band, nearest
+	// filtering so a shader reads exact values, not interpolated neighbors.
+	void uploadFloatTexture2D(@NonNull GlTexture2D texture,
+			@NonNull float[] data,
+			int width,
+			int height) {
+		bindTexture(0, texture);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_MIN_FILTER,
+				GLES20.GL_NEAREST);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_MAG_FILTER,
+				GLES20.GL_NEAREST);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_WRAP_S,
+				GLES20.GL_CLAMP_TO_EDGE);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_WRAP_T,
+				GLES20.GL_CLAMP_TO_EDGE);
+		GLES20.glTexImage2D(
+				GLES20.GL_TEXTURE_2D,
+				0,
+				GLES30.GL_R32F,
+				width,
+				height,
+				0,
+				GLES30.GL_RED,
+				GLES30.GL_FLOAT,
+				FloatBuffer.wrap(data));
+		texture.setSize(width, height);
+	}
+
 	@Nullable
 	String uploadCubemapFromAtlas(@NonNull GlCubemap cubemap,
 			@NonNull Bitmap bitmap) {

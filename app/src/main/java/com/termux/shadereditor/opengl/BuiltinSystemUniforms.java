@@ -16,7 +16,10 @@ import androidx.core.content.ContextCompat;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -107,6 +110,15 @@ final class BuiltinSystemUniforms {
 	private float batteryTemp;
 	private float mediaVolumeLevel;
 	private float mpvAudioLevelValue;
+	// JDSP 108-band bridge (bands.bin): raw float32, one per semitone, written
+	// by the native engine each 30Hz tick via mmap. Uploaded as an R32F
+	// sampler2D named "bands"; a shader reads band i with
+	// texture2D(bands, vec2((float(i)+0.5)/108.0, 0.5)).r
+	private GlDevice device;
+	private GlTexture2D bandsTexture;
+	private final float[] bandsData = new float[108];
+	private long lastBandsUpload;
+	private static final long BANDS_UPDATE_INTERVAL = 33333333L; // ~30Hz (ns)
 
 	BuiltinSystemUniforms(@NonNull Context context) {
 		this.context = context;
@@ -115,6 +127,7 @@ final class BuiltinSystemUniforms {
 	void configure(
 			@NonNull GlDevice device,
 			@NonNull List<GlProgram> programs) {
+		this.device = device;
 		lastBatteryUpdate = 0L;
 		lastBatteryTempUpdate = 0L;
 		lastDateUpdate = 0L;
@@ -199,6 +212,7 @@ final class BuiltinSystemUniforms {
 	}
 
 	void apply(@NonNull ProgramBindings bindings, long now) {
+		applyBandsTexture(bindings, now);
 		if (hasNightMode) {
 			bindings.setInt(ShaderRenderer.UNIFORM_NIGHT_MODE, nightMode);
 		}
@@ -451,6 +465,40 @@ final class BuiltinSystemUniforms {
 			// nothing to react to, which is the correct fallback appearance.
 		}
 		return values;
+	}
+
+	private static void readBandsFile(@NonNull float[] out) {
+		File file = new File("/data/data/com.termux.jdsp/files/bands.bin");
+		if (!file.exists() || file.length() < out.length * 4L) {
+			return;
+		}
+		try (FileInputStream in = new FileInputStream(file)) {
+			byte[] buf = new byte[out.length * 4];
+			if (in.read(buf) < buf.length) {
+				return;
+			}
+			ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
+			for (int i = 0; i < out.length; i++) {
+				out[i] = bb.getFloat();
+			}
+		} catch (Exception ignored) {
+			// Missing/unreadable mid-write — keep the previous texture content.
+		}
+	}
+
+	private void applyBandsTexture(@NonNull ProgramBindings bindings, long now) {
+		if (bandsTexture == null && device != null) {
+			bandsTexture = device.createTexture2D();
+		}
+		if (bandsTexture == null) {
+			return;
+		}
+		if (now - lastBandsUpload > BANDS_UPDATE_INTERVAL) {
+			lastBandsUpload = now;
+			readBandsFile(bandsData);
+			device.uploadFloatTexture2D(bandsTexture, bandsData, bandsData.length, 1);
+		}
+		bindings.setTexture("bands", bandsTexture);
 	}
 
 	private static float getMediaVolumeLevel(@NonNull Context context) {
