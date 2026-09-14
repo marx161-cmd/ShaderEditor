@@ -232,3 +232,61 @@ fill, not new touch-event wiring.
   first (multipass support exists per ShaderEditor commit `a1c4f6b`,
   but nobody has actually deployed/profiled `ferrofluid.mp` there yet)
   — that's a real prerequisite, not assumed done.
+
+## 2026-09-14 — arbitrary named external textures (shader-declared, `~/.shader`)
+
+### What it is
+
+Generalise the one-off JDSP `bands` texture into a generic bridge that lets
+any shader declare up to **12** arbitrary `sampler2D <name>` textures whose
+pixel data lives in raw files in Termux home's `~/.shader`
+(`/data/data/com.termux/files/home/.shader`, shared-UID writable).
+
+### Declaration (in the shader source, shared preamble or anywhere)
+
+    #define EXT_TEXTURE_<name> <format> <width> <height>
+
+e.g. `#define EXT_TEXTURE_state rgba16f 256 256`. This is a legal, unused
+object-like GLSL macro, so it survives compilation unchanged and has no effect
+on line mapping. The data file is `<name>.bin` in `~/.shader`; the shader
+supplies format + dimensions, the file supplies raw pixels.
+
+### Formats
+
+- `r32f` → `GL_R32F`/`GL_RED`/`GL_FLOAT` (ES3)
+- `rgba8` → `GL_RGBA`/`GL_UNSIGNED_BYTE` (ES2 ok)
+- `rgba16f` → `GL_RGBA16F`/`GL_RGBA`/`GL_HALF_FLOAT` (ES3)
+
+### Decisions (grounded in the code)
+
+- **Auto-discover by filename, but declare format/dims in-shader** — chosen
+  over a sidecar/header/manifest so the shader stays the single source of
+  truth and the raw file stays a dumb pixel blob. Parser is
+  `ShaderSourcePreparer.parseExternalTextures` (`PATTERN_EXT_TEXTURE`), same
+  shape as `PATTERN_FTIME` / `getGLES3Version`.
+- **Precedence (lowest → highest):** external bridge → DB user texture →
+  camera/buffer builtins. The bridge applies in `BuiltinUniforms.beginFrame`
+  before `textureResources.applyTo`, so an explicitly-uploaded DB texture of
+  the same name wins.
+- **A declared texture is only bound if the shader also declares the matching
+  `uniform sampler2D <name>;`** (checked against the discovered-sampler
+  union), and float formats are skipped on the ES2 fallback (`requiresEs3`).
+- **mtime-driven upload, not periodic:** each slot stats its file every frame
+  and re-reads only on mtime change; short/torn reads keep the previous
+  texture content. NEAREST + CLAMP_TO_EDGE filtering (data-texture semantics,
+  matching the existing `bands` path).
+- **JDSP `bands` is left untouched** — it remains a hardcoded one-off in
+  `BuiltinSystemUniforms`, not folded into this bridge.
+
+### Files
+
+- `ExternalTextureSpec.java` (new): record + `Format` enum (`requiresEs3`,
+  `bytesPerPixel`).
+- `ExternalTextureBridge.java` (new): watch dir + 12 slots + mtime upload.
+- `GlDevice.java`: `uploadRgba8Texture2D` / `uploadRgba16fTexture2D`
+  (reuses `uploadFloatTexture2D` for R32F).
+- `ShaderSourcePreparer.java` / `PreparedShaderSource.java`: parse + carry
+  specs.
+- `ShaderTextureResources.java`: `samplerNames()`.
+- `RendererProgramManager.java`: `getExternalTextures()`.
+- `BuiltinUniforms.java` / `ShaderRenderer.java`: wire configure/apply/release.

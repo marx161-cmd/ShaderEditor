@@ -9,7 +9,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import com.termux.shadereditor.database.Database;
 
@@ -120,6 +122,15 @@ final class ShaderTextureResources {
 				bindings.setTexture(binding.sampler().name(), binding.texture());
 			}
 		}
+	}
+
+	@NonNull
+	Set<String> samplerNames() {
+		var names = new HashSet<String>();
+		for (var binding : this.bindings) {
+			names.add(binding.sampler().name());
+		}
+		return names;
 	}
 
 	@Nullable

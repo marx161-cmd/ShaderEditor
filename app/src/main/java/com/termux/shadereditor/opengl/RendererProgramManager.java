@@ -230,6 +230,11 @@ final class RendererProgramManager {
 		return textureResources;
 	}
 
+	@NonNull
+	List<ExternalTextureSpec> getExternalTextures() {
+		return preparedShaderSource.getExternalTextures();
+	}
+
 	private void prepareShaderSource(@Nullable String source) {
 		preparedShaderSource = ShaderSourcePreparer.prepare(
 				source,

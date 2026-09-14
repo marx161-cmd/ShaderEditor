@@ -297,6 +297,65 @@ final class GlDevice {
 		texture.setSize(width, height);
 	}
 
+	// Uploads raw RGBA8 bytes as an 8-bit RGBA texture. Works on ES2 and ES3.
+	void uploadRgba8Texture2D(@NonNull GlTexture2D texture,
+			@NonNull ByteBuffer data,
+			int width,
+			int height) {
+		bindTexture(0, texture);
+		setNearestClamp();
+		GLES20.glTexImage2D(
+				GLES20.GL_TEXTURE_2D,
+				0,
+				GLES20.GL_RGBA,
+				width,
+				height,
+				0,
+				GLES20.GL_RGBA,
+				GLES20.GL_UNSIGNED_BYTE,
+				data);
+		texture.setSize(width, height);
+	}
+
+	// Uploads raw half-float RGBA bytes as an RGBA16F texture (GLES 3.0).
+	void uploadRgba16fTexture2D(@NonNull GlTexture2D texture,
+			@NonNull ByteBuffer data,
+			int width,
+			int height) {
+		bindTexture(0, texture);
+		setNearestClamp();
+		GLES20.glTexImage2D(
+				GLES20.GL_TEXTURE_2D,
+				0,
+				GLES30.GL_RGBA16F,
+				width,
+				height,
+				0,
+				GLES20.GL_RGBA,
+				GLES30.GL_HALF_FLOAT,
+				data);
+		texture.setSize(width, height);
+	}
+
+	private static void setNearestClamp() {
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_MIN_FILTER,
+				GLES20.GL_NEAREST);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_MAG_FILTER,
+				GLES20.GL_NEAREST);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_WRAP_S,
+				GLES20.GL_CLAMP_TO_EDGE);
+		GLES20.glTexParameteri(
+				GLES20.GL_TEXTURE_2D,
+				GLES20.GL_TEXTURE_WRAP_T,
+				GLES20.GL_CLAMP_TO_EDGE);
+	}
+
 	@Nullable
 	String uploadCubemapFromAtlas(@NonNull GlCubemap cubemap,
 			@NonNull Bitmap bitmap) {

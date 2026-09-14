@@ -33,19 +33,26 @@ final class PreparedShaderSource {
 	@NonNull
 	private final List<DiscoveredSampler> samplers;
 
+	// Shader-declared external textures (arbitrary named sampler2D backed by
+	// raw files in ~/.shader).
+	@NonNull
+	private final List<ExternalTextureSpec> externalTextures;
+
 	private PreparedShaderSource(
 			float fTimeMax,
 			@Nullable String gles3VersionDirective,
 			@Nullable PreparedShaderInput fragmentShader,
 			@NonNull BackBufferParameters backBufferParameters,
 			@NonNull List<PreparedSection> sections,
-			@NonNull List<DiscoveredSampler> samplers) {
+			@NonNull List<DiscoveredSampler> samplers,
+			@NonNull List<ExternalTextureSpec> externalTextures) {
 		this.fTimeMax = fTimeMax;
 		this.gles3VersionDirective = gles3VersionDirective;
 		this.fragmentShader = fragmentShader;
 		this.backBufferParameters = backBufferParameters;
 		this.sections = List.copyOf(sections);
 		this.samplers = List.copyOf(samplers);
+		this.externalTextures = List.copyOf(externalTextures);
 	}
 
 	@NonNull
@@ -54,14 +61,16 @@ final class PreparedShaderSource {
 			float fTimeMax,
 			@Nullable String gles3VersionDirective,
 			@NonNull BackBufferParameters backBufferParameters,
-			@NonNull List<DiscoveredSampler> samplers) {
+			@NonNull List<DiscoveredSampler> samplers,
+			@NonNull List<ExternalTextureSpec> externalTextures) {
 		return new PreparedShaderSource(
 				fTimeMax,
 				gles3VersionDirective,
 				fragmentShader,
 				backBufferParameters,
 				List.of(),
-				samplers);
+				samplers,
+				externalTextures);
 	}
 
 	@NonNull
@@ -69,14 +78,16 @@ final class PreparedShaderSource {
 			float fTimeMax,
 			@Nullable String gles3VersionDirective,
 			@NonNull List<PreparedSection> sections,
-			@NonNull List<DiscoveredSampler> samplers) {
+			@NonNull List<DiscoveredSampler> samplers,
+			@NonNull List<ExternalTextureSpec> externalTextures) {
 		return new PreparedShaderSource(
 				fTimeMax,
 				gles3VersionDirective,
 				null,
 				new BackBufferParameters(),
 				sections,
-				samplers);
+				samplers,
+				externalTextures);
 	}
 
 	@NonNull
@@ -86,6 +97,7 @@ final class PreparedShaderSource {
 				null,
 				null,
 				new BackBufferParameters(),
+				List.of(),
 				List.of(),
 				List.of());
 	}
@@ -116,6 +128,11 @@ final class PreparedShaderSource {
 	@NonNull
 	List<DiscoveredSampler> getSamplers() {
 		return samplers;
+	}
+
+	@NonNull
+	List<ExternalTextureSpec> getExternalTextures() {
+		return externalTextures;
 	}
 
 	@NonNull

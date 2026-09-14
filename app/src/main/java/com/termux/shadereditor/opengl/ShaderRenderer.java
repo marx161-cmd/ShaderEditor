@@ -157,7 +157,9 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 						programs,
 						programManager.getFTimeMax(),
 						programManager.getTextureResources(),
-						programManager.isMultipass());
+						programManager.isMultipass(),
+						programManager.getExternalTextures(),
+						programManager.isGles3());
 			} else if (!reloadResult.programErrors().isEmpty()) {
 				submitErrors(reloadResult.programErrors());
 			}

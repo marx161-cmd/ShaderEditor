@@ -44,6 +44,7 @@ final class BuiltinUniforms {
 	private final BuiltinSystemUniforms systemUniforms;
 	@NonNull
 	private final BuiltinCameraUniforms cameraUniforms;
+	private final ExternalTextureBridge externalTextures;
 
 	@Nullable
 	private List<ProgramBindings> programBindings;
@@ -63,6 +64,7 @@ final class BuiltinUniforms {
 		sensorUniforms = new BuiltinSensorUniforms(context);
 		systemUniforms = new BuiltinSystemUniforms(context);
 		cameraUniforms = new BuiltinCameraUniforms(context);
+		externalTextures = new ExternalTextureBridge();
 	}
 
 	void setQuality(float quality) {
@@ -74,7 +76,9 @@ final class BuiltinUniforms {
 			@NonNull List<GlProgram> programs,
 			float fTimeMax,
 			@NonNull ShaderTextureResources textureResources,
-			boolean multipass) {
+			boolean multipass,
+			@NonNull List<ExternalTextureSpec> externalTextureSpecs,
+			boolean gles3) {
 		releaseModules();
 		this.fTimeMax = fTimeMax;
 		this.textureResources = textureResources;
@@ -89,6 +93,11 @@ final class BuiltinUniforms {
 		sensorUniforms.configure(device, programs);
 		systemUniforms.configure(device, programs);
 		cameraUniforms.configure(device, programs, textureResources);
+		externalTextures.configure(
+				device,
+				externalTextureSpecs,
+				textureResources.samplerNames(),
+				gles3);
 	}
 
 	@NonNull
@@ -179,6 +188,7 @@ final class BuiltinUniforms {
 			systemUniforms.apply(b, now);
 			sensorUniforms.apply(b);
 			cameraUniforms.apply(b);
+			externalTextures.apply(b, now);
 			textureResources.applyTo(b);
 		}
 
@@ -242,6 +252,7 @@ final class BuiltinUniforms {
 		sensorUniforms.release();
 		systemUniforms.release();
 		cameraUniforms.release();
+		externalTextures.release();
 	}
 
 	private static int getDeviceRotation(@NonNull Context context) {

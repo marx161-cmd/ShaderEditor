@@ -35,6 +35,11 @@ final class ShaderSourcePreparer {
 	private static final Pattern PATTERN_GLES3_VERSION = Pattern.compile(
 			"^#version 3[0-9]{2} es$",
 			Pattern.MULTILINE);
+	private static final Pattern PATTERN_EXT_TEXTURE = Pattern.compile(
+			"^#define[ \\t]+EXT_TEXTURE_([A-Za-z_][A-Za-z0-9_]*)[ \\t]+" +
+					"(r32f|rgba8|rgba16f)[ \\t]+" +
+					"([0-9]+)[ \\t]+([0-9]+)[ \\t]*$",
+			Pattern.MULTILINE);
 	private static final String OES_EXTERNAL =
 			"#extension GL_OES_EGL_image_external : require\n";
 	private static final String OES_EXTERNAL_ESS3 =
@@ -56,19 +61,22 @@ final class ShaderSourcePreparer {
 		}
 
 		String gles3Version = getGLES3Version(source, version);
+		List<ExternalTextureSpec> externalTextures = parseExternalTextures(source);
 		ShaderSectionParser.Parsed parsed = ShaderSectionParser.parse(source);
 		if (parsed.isMultipass()) {
 			return prepareMultiPass(
 					parsed,
 					gles3Version,
 					fTimeMax,
-					maxTextures);
+					maxTextures,
+					externalTextures);
 		}
 		return prepareSinglePass(
 				source,
 				gles3Version,
 				fTimeMax,
-				maxTextures);
+				maxTextures,
+				externalTextures);
 	}
 
 	@NonNull
@@ -76,7 +84,8 @@ final class ShaderSourcePreparer {
 			@NonNull String source,
 			@Nullable String gles3Version,
 			float fTimeMax,
-			int maxTextures) {
+			int maxTextures,
+			@NonNull List<ExternalTextureSpec> externalTextures) {
 		PreparedShaderInput preparedInput = new PreparedShaderInput(
 				source,
 				ShaderLineMapping.identity());
@@ -101,7 +110,8 @@ final class ShaderSourcePreparer {
 				fTimeMax,
 				gles3Version,
 				backBufferParameters,
-				samplers);
+				samplers,
+				externalTextures);
 	}
 
 	@NonNull
@@ -109,7 +119,8 @@ final class ShaderSourcePreparer {
 			@NonNull ShaderSectionParser.Parsed parsed,
 			@Nullable String gles3Version,
 			float fTimeMax,
-			int maxTextures) {
+			int maxTextures,
+			@NonNull List<ExternalTextureSpec> externalTextures) {
 		String preamble = parsed.preamble();
 		int preambleLines = preamble.isEmpty()
 				? 0
@@ -169,7 +180,8 @@ final class ShaderSourcePreparer {
 				fTimeMax,
 				gles3Version,
 				sections,
-				new ArrayList<>(userSamplers.values()));
+				new ArrayList<>(userSamplers.values()),
+				externalTextures);
 	}
 
 	@NonNull
@@ -255,6 +267,39 @@ final class ShaderSourcePreparer {
 	private static String getGLES3Version(@NonNull String source, int version) {
 		Matcher matcher = PATTERN_GLES3_VERSION.matcher(source);
 		return version == 3 && matcher.find() ? matcher.group(0) : null;
+	}
+
+	@NonNull
+	private static List<ExternalTextureSpec> parseExternalTextures(
+			@Nullable String source) {
+		if (source == null) {
+			return List.of();
+		}
+		List<ExternalTextureSpec> specs = new ArrayList<>();
+		Matcher matcher = PATTERN_EXT_TEXTURE.matcher(source);
+		while (matcher.find() &&
+				specs.size() < ExternalTextureBridge.MAX_EXTERNAL_TEXTURES) {
+			ExternalTextureSpec.Format format = switch (matcher.group(2)) {
+				case "r32f" -> ExternalTextureSpec.Format.R32F;
+				case "rgba8" -> ExternalTextureSpec.Format.RGBA8;
+				case "rgba16f" -> ExternalTextureSpec.Format.RGBA16F;
+				default -> null;
+			};
+			if (format == null) {
+				continue;
+			}
+			int width = Integer.parseInt(matcher.group(3));
+			int height = Integer.parseInt(matcher.group(4));
+			if (width < 1 || height < 1) {
+				continue;
+			}
+			specs.add(new ExternalTextureSpec(
+					matcher.group(1),
+					format,
+					width,
+					height));
+		}
+		return specs;
 	}
 
 	@NonNull
