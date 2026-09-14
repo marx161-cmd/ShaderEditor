@@ -154,3 +154,81 @@ Applied at buffer-allocation time (`ensureMultipassTargets`), consistent with
 how single-pass bakes quality in at surface setup; a live spinner change
 without a surface recreation does not resize existing buffers (same limitation
 as single-pass).
+
+## 2026-09-09 — swipe-fling spin physics for wallpaper shaders (ported from AuraOrbit), not yet started
+
+**Motivation**: `ferrofluid.mp` (a multipass shader on comrade,
+`~/builds/amd/shader-backdrop/shaders/ferrofluid.mp/`, a floating
+audio-reactive raymarched spiky sphere) currently just auto-spins at a
+constant rate (`SPIN_SPEED`/`SPIN_SPEED_2` in `image.glsl`, driven by
+`iTime`). Idea: give it AuraOrbit's swipe-and-let-go "slick" spin feel
+(momentum that decelerates naturally) if/when it's deployed as a
+ShaderEditor wallpaper. Session arrived here after several wrong turns
+worth recording so they aren't re-tried:
+
+**Rejected: cross-app live bridge to AuraOrbit.** First idea was
+renaming AuraOrbit to `com.termux.orbit` (matching the existing
+`sharedUserId` → `android.uid.system` migration ShaderEditor and
+`com.termux.mpv` already did) and exposing its live `sphereRotation`
+continuously, the same file-bridge shape ShaderEditor already uses for
+`mpvAudioLevel` (`ShaderEditor` commit `1869f4d`). Rejected in favor of
+a self-contained port — no dependency on AuraOrbit being installed/
+running, no package rename, no cross-app reliability/latency concerns.
+
+**Rejected: pulling in libGDX for the physics.** AuraOrbit's actual
+rotation state (`SphereEngine.java`) is a libGDX `Quaternion` +
+`Vector3` angular velocity, because it needs full gimbal-lock-free 3D
+orientation (icons must stay coherent under drag around any arbitrary
+axis). Confirmed unnecessary here: `ferrofluid.mp`'s rotation is
+already just two independent fixed-axis scalar rotations (`rotateY`
+then `rotateX` in `mapSDF`), not a free 3D orientation. The friction/
+momentum FEEL doesn't require quaternions or a 3D engine dependency —
+just two scalar angular velocities, each decaying via the same curve.
+
+**Decided: port the physics constants/formula only, not the engine.**
+From `~/builds/android/AuraOrbit/app/src/main/java/dev/jaimin/auraorbit/SphereEngine.java`:
+- `FRICTION = 0.97` (line 319) — per-frame exponential decay:
+  `frictionThisFrame = FRICTION^(deltaTime*120)` (line 2861), applied
+  to angular velocity every frame (`angularVelocity.scl(...)`, 2862).
+- `VELOCITY_EPSILON = 0.001` (line 325) — snap angular velocity to
+  zero below this magnitude (2865) so decay doesn't tail forever.
+- `FLING_SENSITIVITY = 0.002` (line 338) — fling velocity (px/sec) →
+  angular velocity (rad/sec) conversion.
+- `ROTATION_SENSITIVITY = 0.005` (line 331) — drag distance (px) →
+  radians, for live drag-to-rotate before release.
+- Reduce to two independent scalar angular velocities (one per axis),
+  not a quaternion, matching `SPIN_SPEED`/`SPIN_SPEED_2`'s existing
+  two-axis model.
+
+**Hook point, confirmed by reading ShaderEditor's source (not
+guessed)**: `ShaderWallpaperService.onTouchEvent()`
+(`app/src/main/java/com/termux/shadereditor/service/ShaderWallpaperService.java:106-111`)
+already forwards raw `MotionEvent`s to `ShaderRenderer.touchAt(e)`
+(`opengl/ShaderRenderer.java:299`) every touch — the plumbing to
+receive swipes already exists. Today it only updates a static
+normalized `mouse` uniform (`opengl/BuiltinUniforms.java:36,135-136,229`)
+with no velocity/momentum tracking at all — that's the actual gap to
+fill, not new touch-event wiring.
+
+**Not yet decided / not started**:
+- New state to add at the `touchAt()` hook: previous position +
+  timestamp per pointer → drag delta → sensitivity-scaled rotation
+  while touching; velocity at release → fling angular velocity; a
+  per-frame update applying the friction curve when not actively
+  touched (mirroring `SphereEngine.java`'s pan/fling/idle state
+  machine, ~lines 2135-2384 and 2756-2865, but with two scalars
+  instead of a quaternion).
+- New uniform name(s) to expose the resulting angle(s) to
+  `image.glsl`, replacing its current `-iTime*SPIN_SPEED` formula —
+  not named yet.
+- Whether to keep AuraOrbit's separate friction-free "idle auto-spin"
+  behavior (engages after fling settles) or drop it — AuraOrbit has
+  this specifically to avoid a visible pulse/stop/pulse artifact
+  between fling-decay and idle spin (documented in its own comments,
+  `SphereEngine.java` ~line 96-99, 2772-2774) — worth reading before
+  reinventing that transition.
+- This whole feature presupposes `ferrofluid.mp` is actually running
+  as a ShaderEditor wallpaper on the Pixel at acceptable performance
+  first (multipass support exists per ShaderEditor commit `a1c4f6b`,
+  but nobody has actually deployed/profiled `ferrofluid.mp` there yet)
+  — that's a real prerequisite, not assumed done.
