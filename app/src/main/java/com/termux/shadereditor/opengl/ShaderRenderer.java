@@ -58,6 +58,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public static final String UNIFORM_PRESSURE = "pressure";
 	public static final String UNIFORM_PROXIMITY = "proximity";
 	public static final String UNIFORM_RESOLUTION = "resolution";
+	public static final String UNIFORM_SURFACE_RESOLUTION = "surfaceResolution";
 	public static final String UNIFORM_ROTATION_MATRIX = "rotationMatrix";
 	public static final String UNIFORM_ROTATION_VECTOR = "rotationVector";
 	public static final String UNIFORM_SCREEN_LOCKED = "screenLocked";

@@ -10,6 +10,8 @@ final class PreparedShaderSource {
 			@NonNull String name,
 			boolean isImage,
 			float scale,
+			int fixedWidth,
+			int fixedHeight,
 			int updateRate,
 			@NonNull PreparedShaderInput fragmentShader,
 			@NonNull List<DiscoveredSampler> samplers) {

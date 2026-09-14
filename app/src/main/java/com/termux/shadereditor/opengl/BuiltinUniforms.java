@@ -234,6 +234,9 @@ final class BuiltinUniforms {
 				ShaderRenderer.UNIFORM_FTIME,
 				((delta % fTimeMax) / fTimeMax * 2f - 1f));
 		bindings.setFloat2(ShaderRenderer.UNIFORM_RESOLUTION, resolution);
+		bindings.setFloat2(
+				ShaderRenderer.UNIFORM_SURFACE_RESOLUTION,
+				surfaceResolution);
 		bindings.setFloat2(ShaderRenderer.UNIFORM_TOUCH, touch);
 		bindings.setFloat2(ShaderRenderer.UNIFORM_TOUCH_START, touchStart);
 		bindings.setFloat2(ShaderRenderer.UNIFORM_MOUSE, mouse);

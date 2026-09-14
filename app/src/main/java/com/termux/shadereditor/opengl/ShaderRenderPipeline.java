@@ -149,15 +149,21 @@ final class ShaderRenderPipeline {
 			if (pass.isImage()) {
 				continue;
 			}
-			// Buffer resolution = surface × quality × per-buffer scale. Quality
-			// scales the expensive computation exactly as it does the main pass
-			// in single-pass mode; the image pass always renders full-res.
-			int width = Math.max(
-					1,
-					Math.round(surfaceWidth * quality * pass.scale()));
-			int height = Math.max(
-					1,
-					Math.round(surfaceHeight * quality * pass.scale()));
+			// Buffer resolution = surface × quality × per-buffer scale, unless
+			// the section declares an absolute pixel size (fixedWidth/Height),
+			// which is used verbatim for small data buffers. Quality scales the
+			// expensive computation exactly as it does the main pass in
+			// single-pass mode; the image pass always renders full-res.
+			int width = pass.fixedWidth() > 0
+					? pass.fixedWidth()
+					: Math.max(
+							1,
+							Math.round(surfaceWidth * quality * pass.scale()));
+			int height = pass.fixedHeight() > 0
+					? pass.fixedHeight()
+					: Math.max(
+							1,
+							Math.round(surfaceHeight * quality * pass.scale()));
 			BufferSet set = new BufferSet(width, height);
 			createBufferTarget(set, 0, halfFloat, gles3, errors);
 			createBufferTarget(set, 1, halfFloat, gles3, errors);
@@ -200,6 +206,7 @@ final class ShaderRenderPipeline {
 					ShaderRenderer.UNIFORM_RESOLUTION,
 					drawResolution);
 			bindBufferSamplers(passBindings, pass.program(), pass.name());
+			bindBufferResolutions(passBindings);
 			device.applyBindings(passBindings);
 			device.draw(fullScreenQuadMesh, pass.program());
 
@@ -292,6 +299,7 @@ final class ShaderRenderPipeline {
 					ShaderRenderer.UNIFORM_RESOLUTION,
 					drawResolution);
 			bindBufferSamplers(passBindings, pass.program(), pass.name());
+			bindBufferResolutions(passBindings);
 			device.applyBindings(passBindings);
 			device.clear(GLES20.GL_COLOR_BUFFER_BIT);
 			device.draw(fullScreenQuadMesh, pass.program());
@@ -314,6 +322,17 @@ final class ShaderRenderPipeline {
 					? set.textures[set.back]
 					: set.textures[set.front];
 			bindings.setTexture(name, texture);
+		}
+	}
+
+	// Exposes each buffer's own resolution as a "<name>Res" vec2 uniform, so a
+	// pass can index a buffer by texel (buffer.width/buffer.height) instead of
+	// assuming it is surface-sized.
+	private void bindBufferResolutions(@NonNull ProgramBindings bindings) {
+		for (Map.Entry<String, BufferSet> entry : bufferSets.entrySet()) {
+			bindings.setFloat2(
+					entry.getKey() + "Res",
+					new float[]{entry.getValue().width, entry.getValue().height});
 		}
 	}
 

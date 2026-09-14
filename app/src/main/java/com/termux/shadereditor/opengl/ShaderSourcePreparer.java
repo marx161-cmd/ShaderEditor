@@ -171,6 +171,8 @@ final class ShaderSourcePreparer {
 					section.name(),
 					section.isImage(),
 					section.scale(),
+					section.fixedWidth(),
+					section.fixedHeight(),
 					section.updateRate(),
 					input,
 					sectionSamplers));

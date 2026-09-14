@@ -290,3 +290,35 @@ supplies format + dimensions, the file supplies raw pixels.
 - `ShaderTextureResources.java`: `samplerNames()`.
 - `RendererProgramManager.java`: `getExternalTextures()`.
 - `BuiltinUniforms.java` / `ShaderRenderer.java`: wire configure/apply/release.
+
+## 2026-09-14 (later) — absolute-size buffers + per-buffer/surface resolution uniforms
+
+### Why
+
+`SE.glsl`/`storm_ball_SE.glsl` use a multipass buffer (`state`) as a
+texel-indexed *register file*: row 0 = physics, row 1 = 108 audio bands, row 2
+= 9 storm targets, each column a scalar. Two things blocked shrinking it:
+
+1. The `image` pass indexed `state` with its own `resolution` (surface),
+   hardcoding `state.width == surface.width`.
+2. The `state` pass's touch→trackball math normalized `touch` (surface pixels)
+   by its own `resolution`, which only matched while the buffer was full-res.
+
+Relative `scale` couldn't be the answer either: buffer size is
+`surface × quality × scale`, and the quality spinner goes down to 1/32, so no
+relative factor guarantees a stable ≥108-wide buffer.
+
+### Changes
+
+- **Absolute-size delimiter**: `==name WxH==` (e.g. `==state 128x3==`) renders
+  the buffer at a fixed pixel size, ignoring surface and quality. Threaded
+  through `ShaderSectionParser` → `ShaderSourcePreparer` →
+  `PreparedShaderSource.PreparedSection` → `RendererProgramManager.PassProgram`
+  → `ShaderRenderPipeline.ensureMultipassTargets`. Backwards compatible — the
+  old `==name [scale] [@rate]==` grammar is unchanged.
+- **`surfaceResolution` builtin** (`vec2`, full surface size) bound in
+  `BuiltinUniforms.bindFrameUniforms`, so a scaled/fixed-size pass can normalize
+  surface-space inputs (`touch`) correctly.
+- **`<name>Res` per-buffer uniform** (`vec2`, each buffer's own size) bound in
+  `ShaderRenderPipeline.bindBufferResolutions` for every pass, so any pass can
+  index a buffer by texel regardless of its size.

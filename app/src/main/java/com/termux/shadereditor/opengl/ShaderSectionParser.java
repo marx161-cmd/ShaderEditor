@@ -13,7 +13,15 @@ import java.util.regex.Pattern;
  *
  * <p>Delimiter grammar (a full line, whitespace-trimmed on both ends):
  *
- * <pre>==name [scale] [@updateRate]==</pre>
+ * <pre>==name [scale|WxH] [@updateRate]==</pre>
+ *
+ * <ul>
+ *   <li>{@code scale}: optional positive float, default 1.0 — buffer renders at
+ *       {@code round(surface × quality × scale)}.</li>
+ *   <li>{@code WxH}: optional absolute pixel size (e.g. {@code 128x3}) — buffer
+ *       renders at a fixed size, independent of surface and quality. Used for
+ *       small data/register-file buffers.</li>
+ * </ul>
  *
  * Everything before the first delimiter is the shared preamble, prepended to
  * every section's compiled source. No delimiter anywhere means single-pass
@@ -24,7 +32,7 @@ final class ShaderSectionParser {
 
 	private static final Pattern DELIMITER = Pattern.compile(
 			"^[ \\t]*==[ \\t]*([A-Za-z_]\\w*)[ \\t]*" +
-					"(?:([0-9]*\\.?[0-9]+)[ \\t]*)?" +
+					"(?:(?:([0-9]+)[xX]([0-9]+))|([0-9]*\\.?[0-9]+))?[ \\t]*" +
 					"(?:@[ \\t]*([1-9][0-9]*)[ \\t]*)?" +
 					"==[ \\t]*$");
 
@@ -32,6 +40,8 @@ final class ShaderSectionParser {
 			@NonNull String name,
 			boolean isImage,
 			float scale,
+			int fixedWidth,
+			int fixedHeight,
 			int updateRate,
 			int delimiterLine,
 			@NonNull String body) {
@@ -75,6 +85,8 @@ final class ShaderSectionParser {
 					delimiter.name,
 					IMAGE_SECTION.equals(delimiter.name),
 					delimiter.scale,
+					delimiter.fixedWidth,
+					delimiter.fixedHeight,
 					delimiter.updateRate,
 					delimiter.lineNumber,
 					body));
@@ -86,6 +98,8 @@ final class ShaderSectionParser {
 	private static final class Delimiter {
 		final String name;
 		final float scale;
+		final int fixedWidth;
+		final int fixedHeight;
 		final int updateRate;
 		final int lineNumber;
 		final int lineStart;
@@ -94,12 +108,16 @@ final class ShaderSectionParser {
 		Delimiter(
 				String name,
 				float scale,
+				int fixedWidth,
+				int fixedHeight,
 				int updateRate,
 				int lineNumber,
 				int lineStart,
 				int lineEnd) {
 			this.name = name;
 			this.scale = scale;
+			this.fixedWidth = fixedWidth;
+			this.fixedHeight = fixedHeight;
 			this.updateRate = updateRate;
 			this.lineNumber = lineNumber;
 			this.lineStart = lineStart;
@@ -123,15 +141,23 @@ final class ShaderSectionParser {
 			Matcher matcher = DELIMITER.matcher(line);
 			if (matcher.matches()) {
 				String name = matcher.group(1);
-				float scale = matcher.group(2) != null
-						? Float.parseFloat(matcher.group(2))
-						: 1f;
-				int updateRate = matcher.group(3) != null
+				int fixedWidth = matcher.group(2) != null
+						? Integer.parseInt(matcher.group(2))
+						: 0;
+				int fixedHeight = matcher.group(3) != null
 						? Integer.parseInt(matcher.group(3))
+						: 0;
+				float scale = matcher.group(4) != null
+						? Float.parseFloat(matcher.group(4))
+						: 1f;
+				int updateRate = matcher.group(5) != null
+						? Integer.parseInt(matcher.group(5))
 						: 1;
 				delimiters.add(new Delimiter(
 						name,
 						scale,
+						fixedWidth,
+						fixedHeight,
 						updateRate,
 						lineNumber,
 						lineStart,

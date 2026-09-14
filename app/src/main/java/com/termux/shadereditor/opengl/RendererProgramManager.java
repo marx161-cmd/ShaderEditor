@@ -33,6 +33,8 @@ final class RendererProgramManager {
 			@NonNull String name,
 			boolean isImage,
 			float scale,
+			int fixedWidth,
+			int fixedHeight,
 			int updateRate,
 			@NonNull GlProgram program,
 			@NonNull ProgramBindings bindings) {
@@ -182,6 +184,8 @@ final class RendererProgramManager {
 					section.name(),
 					section.isImage(),
 					section.scale(),
+					section.fixedWidth(),
+					section.fixedHeight(),
 					section.updateRate(),
 					result.getProgram(),
 					new ProgramBindings(result.getProgram())));
