@@ -1,5 +1,7 @@
 package com.termux.shadereditor.opengl;
 
+import android.util.Log;
+
 import androidx.annotation.NonNull;
 
 import java.io.File;
@@ -27,6 +29,7 @@ import java.util.Set;
  * only the raw pixels.
  */
 final class ExternalTextureBridge {
+	private static final String TAG = "ExternalTextureBridge";
 	static final int MAX_EXTERNAL_TEXTURES = 12;
 	private static final String WATCH_DIR =
 			"/data/data/com.termux/files/home/.shader";
@@ -82,8 +85,11 @@ final class ExternalTextureBridge {
 	void apply(@NonNull ProgramBindings bindings, long now) {
 		for (Slot slot : slots.values()) {
 			long modified = slot.file.lastModified();
-			if (modified != 0L && modified != slot.lastModified) {
-				upload(slot);
+			// Only record the mtime once the data is actually in the texture.
+			// Recording it unconditionally meant a single failed read retired
+			// the slot permanently.
+			if (modified != 0L && modified != slot.lastModified
+					&& upload(slot)) {
 				slot.lastModified = modified;
 			}
 			bindings.setTexture(slot.spec.name(), slot.texture);
@@ -100,18 +106,37 @@ final class ExternalTextureBridge {
 		device = null;
 	}
 
-	private void upload(@NonNull Slot slot) {
+	// Returns true only if the texture actually received storage. A false here
+	// must NOT be recorded as "done" by the caller, or the slot is stuck for the
+	// lifetime of the process.
+	private boolean upload(@NonNull Slot slot) {
 		ExternalTextureSpec spec = slot.spec;
 		int expected = spec.width() * spec.height() * spec.format().bytesPerPixel;
 		byte[] bytes = new byte[expected];
 		try (FileInputStream in = new FileInputStream(slot.file)) {
-			if (in.read(bytes) < expected) {
-				// Torn/short write; keep the previous texture content.
-				return;
+			// InputStream.read(byte[]) is ONE read() and is free to return fewer
+			// bytes than asked for -- routinely so for multi-megabyte buffers,
+			// depending on page-cache state. The old code did a single read and
+			// bailed when it came up short, which left the GlTexture2D created
+			// but never given storage: an INCOMPLETE texture, where every
+			// texelFetch returns (0, 0, 0, 1). That is silent, it is sticky, and
+			// it differs between processes, which is exactly how a shader could
+			// look right in the editor and have no texture at all as a
+			// wallpaper. Read until full or genuine EOF instead.
+			int off = 0;
+			while (off < expected) {
+				int n = in.read(bytes, off, expected - off);
+				if (n < 0) {
+					Log.w(TAG, "short file for '" + spec.name() + "': got " + off
+							+ " of " + expected + " bytes; not uploading");
+					return false;
+				}
+				off += n;
 			}
 		} catch (IOException | SecurityException e) {
-			// Unreadable or mid-write; keep the previous texture content.
-			return;
+			Log.w(TAG, "cannot read '" + spec.name() + "' from "
+					+ slot.file.getPath(), e);
+			return false;
 		}
 
 		ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder());
@@ -128,5 +153,6 @@ final class ExternalTextureBridge {
 						slot.texture, data, spec.width(), spec.height());
 			}
 		}
+		return true;
 	}
 }
