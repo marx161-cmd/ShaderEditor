@@ -322,3 +322,26 @@ relative factor guarantees a stable ≥108-wide buffer.
 - **`<name>Res` per-buffer uniform** (`vec2`, each buffer's own size) bound in
   `ShaderRenderPipeline.bindBufferResolutions` for every pass, so any pass can
   index a buffer by texel regardless of its size.
+
+## 2026-10-09 — beat clock in ShaderEditor (shared, for every phone shader) (user)
+
+Need: the Pixel port of the swarm shader (shader-backdrop scope.md 2026-10-09, fairy swarm / "pockets") wants bar-
+locked behaviour; the phone had no beat clock. User OK'd putting it at the SHARED layer, not in one shader:
+- Port the desktop's proven tracker (`~/builds/amd/shader-backdrop/beat_track.py`: autocorrelation over ~8 s of onset
+  history + harmonic comb + log-BPM prior, 50-210 BPM, phase lock) to Java in `BuiltinSystemUniforms`, fed by the
+  JDSP `bands.bin` the renderer already reads every frame.
+- New builtins: `beatCount` (CONTINUOUS, flywheels through silence -- the desktop's u_beat_count invariants),
+  `beatPhase`, `beatConf`, `beatBpm`, plus a kick envelope. tools/se_to_mp.py maps them to the desktop's uniforms.
+- Known limits vs the desktop: no look-ahead (the desktop uses the ~0.9 s speaker delay), so kicks register just after
+  the hit; the locked clock still predicts beats on time; ~4-8 s to lock after a track starts (gate on beatConf).
+- Order: (1) measure how often JDSP rewrites bands.bin (tempo tracking needs a steady >= 30 Hz); (2) port + verify on
+  the phone against the desktop clock on the same track; (3) then the swarm prototype on the desktop.
+
+2026-10-09 (later) — step 1 measured, BLOCKER found: bands.bin content changes at ~12 Hz (300 md5 reads over 10.0 s
+at 30 reads/s, 123 changes, music playing). JDSP source (jdspController.c JamesDSPProcess, ~l.513-546): the 108 band
+biquads only run on the ONE audio block of each "30 Hz" Lua tick (luaTickInterval = fs / n / 30 blocks; the tick
+fires every interval+1 blocks), so each bands.bin value is the RMS of a single ~10-20 ms block with filter state
+that skipped all samples in between -- a noisy snapshot, not a continuous energy. Beat tracking on that is possible
+but degraded (onset timing +-40 ms, low bands barely settle within one block). Options put to the user: track on the
+12 Hz feed anyway / fix the meter at the source in JDSP (filters on every sample, energy accumulated between ticks,
+higher publish rate -- a native change that ships via the vendor .so / OTA chain) / something else.
