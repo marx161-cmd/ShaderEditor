@@ -1,5 +1,9 @@
 package com.termux.shadereditor.opengl;
 
+import android.os.SystemClock;
+
+import com.termux.shadereditor.beat.BeatClock;
+
 import android.content.Context;
 import android.view.MotionEvent;
 import android.view.WindowManager;
@@ -148,6 +152,9 @@ final class BuiltinUniforms {
 			case MotionEvent.ACTION_DOWN:
 				touchStart[0] = touch[0];
 				touchStart[1] = touch[1];
+				// Tap tempo: the touch's own time, moved onto System.nanoTime.
+				BeatClock.tap(System.nanoTime() - (SystemClock.uptimeMillis() -
+						e.getEventTime()) * 1_000_000L);
 				break;
 			case MotionEvent.ACTION_UP:
 			case MotionEvent.ACTION_CANCEL:

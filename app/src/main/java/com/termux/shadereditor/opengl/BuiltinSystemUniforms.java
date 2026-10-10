@@ -331,9 +331,12 @@ final class BuiltinSystemUniforms {
 			updateMicGating(now);
 		}
 		if (hasMicAmplitude && micInputListener != null) {
-			bindings.setFloat(
-					ShaderRenderer.UNIFORM_MIC_AMPLITUDE,
-					micInputListener.getAmplitude());
+			float amp = micInputListener.getAmplitude();
+			bindings.setFloat(ShaderRenderer.UNIFORM_MIC_AMPLITUDE, amp);
+			BeatClock micClock = beatClock;
+			if (micClock != null) {
+				micClock.feedMic(amp, now); // tap tempo's silence reset
+			}
 		}
 		if (hasMpvAudioLevel) {
 			if (now - lastMpvAudioLevelUpdate > MPV_AUDIO_LEVEL_UPDATE_INTERVAL) {

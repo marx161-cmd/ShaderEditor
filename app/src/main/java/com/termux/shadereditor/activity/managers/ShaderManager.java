@@ -215,7 +215,6 @@ public class ShaderManager {
 		}
 
 		currentProjectSession = loadSavedProjectSession(selectedShaderId, src);
-		updatePendingCrashShaderId();
 		setModified(false);
 		shaderListManager.loadShadersAsync();
 		Toast.makeText(activity, R.string.shader_saved,
@@ -285,7 +284,6 @@ public class ShaderManager {
 		if (shaderId == selectedShaderId) {
 			selectedShaderId = NO_SHADER;
 			currentProjectSession = null;
-			updatePendingCrashShaderId();
 		}
 	}
 
@@ -323,15 +321,6 @@ public class ShaderManager {
 		uiManager.setToolbarTitle(toolbarTitle);
 		shaderListManager.setSelectedShaderId(selectedShaderId);
 		shaderViewManager.setProjectSession(projectSession);
-		updatePendingCrashShaderId();
 		setModified(false);
-	}
-
-	private void updatePendingCrashShaderId() {
-		ShaderEditorApp.preferences.setPendingCrashShaderId(
-				ShaderEditorApp.preferences.doesRunInBackground() &&
-						selectedShaderId > 0
-						? selectedShaderId
-						: 0);
 	}
 }

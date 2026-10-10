@@ -1,6 +1,7 @@
 #version 300 es
 // beat_test -- shows the phone beat clock (scope.md 2026-10-10).
-// Colour = source: grey none, orange live tracker, green cached desktop map.
+// Colour = source: grey none, orange live tracker, green cached desktop map,
+// blue tapped tempo (8 even taps anywhere).
 // Big disc flashes on every beat; the ring fills over one beat; the four dots
 // count beats in the bar (beatCount mod 4). Bottom bars: left = confidence,
 // right = BPM (full width = 200 BPM, tick marks every 20).
@@ -17,7 +18,8 @@ out vec4 fragColor;
 
 void main() {
 	vec2 uv = (gl_FragCoord.xy - 0.5 * resolution) / resolution.x;
-	vec3 tint = beatSource == 2 ? vec3(0.2, 1.0, 0.45)
+	vec3 tint = beatSource == 3 ? vec3(0.25, 0.55, 1.0)
+			: beatSource == 2 ? vec3(0.2, 1.0, 0.45)
 			: beatSource == 1 ? vec3(1.0, 0.55, 0.15)
 			: vec3(0.5);
 	vec3 col = vec3(0.02);

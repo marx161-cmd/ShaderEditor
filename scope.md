@@ -433,3 +433,24 @@ Known open items: (1) com.termux.vlc reports position=0 in its media session -> 
 file: matches can give phase; (2) output latency (speaker vs Bluetooth) between player position and what is heard
 -> a tunable offset, judged on screen; (3) a map from a different upload of the same song could be offset -> check
 map phase against live onsets before trusting it (later, if it shows).
+
+## 2026-10-10 — tap tempo in the beat clock (user)
+
+Use case (user): music from another device (mic-driven shaders at home) has no audio the phone can track.
+Decided (user): tap the screen to the beat; after two bars (8 taps) the clock takes that tempo and holds it until a
+known song is recognised or a "clear reset" -- the audio stopping, i.e. the short silence between songs.
+Built (v101, user-confirmed "turns blue and takes my tempo"): 8 taps whose intervals all sit within 10% of their
+median -> least-squares grid (tempo + phase); up to 16 taps refine it; a >2.5 s gap starts a new count. Priority:
+cached map > taps > live tracker. Reset: song change in the media session, a map match, or >= 1.5 s of silence
+24 dB below the running music level (JDSP frame rms while frames flow, else the mic while a shader has it open;
+frames that stop after flowing count as silence). beatSource 3 = tap (blue in beat_test.glsl).
+Known limit: with no phone-side audio nothing corrects a slightly-off tapped tempo -- re-tap. Mic shaders must
+declare a beat uniform for the clock (and its mic-based reset) to run.
+
+## 2026-10-10 — crash-recovery #if 0 wrapper REMOVED (user)
+
+The guard (MainActivity.recoverFromCrashIfNeeded) wrapped the last-loading shader in #if 0 after any process death
+during load. Today it only ever fired on blazer-sysapp-update install kills (am_kill "installPackageLI"), never a
+real crash, and since v95 it rewrote the user's own ~/shaders file. Decided (user): drop it wholesale -- a shader
+that genuinely crash-loops the app is now fixed or moved out of ~/shaders from Termux. Removed in v102 (pending-
+crash pref, ShaderManager tracking, string).

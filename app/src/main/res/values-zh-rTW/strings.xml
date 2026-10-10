@@ -30,7 +30,6 @@
 	<string name="menu_btn">更多選項</string>
 	<string name="show_errors">顯示錯誤</string>
 	<string name="shader_saved">著色器已儲存</string>
-	<string name="shader_disabled_after_crash">上一個著色器導致程式崩潰，已被自動註解。</string>
 
 	<string name="details">詳情</string>
 

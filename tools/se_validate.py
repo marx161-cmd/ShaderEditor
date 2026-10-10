@@ -18,6 +18,9 @@ for m in img.finditer(src):
 src = img.sub(lambda m: "// " + m.group(0)[1:], src)
 lines = src.split("\n")
 delims = [i for i, l in enumerate(lines) if re.match(r"^\s*==.*==\s*$", l)]
+if not delims:  # single-pass: the whole file is one fragment shader
+    lines.insert(1, "==image==")
+    delims = [1]
 pre = "\n".join(lines[:delims[0]]) + "\n"
 types_c = ("image2D", "image3D", "uimage2D", "uimage3D", "iimage2D", "iimage3D",
            "sampler3D", "usampler2D", "usampler3D", "isampler2D", "isampler3D")

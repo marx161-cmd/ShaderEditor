@@ -43,7 +43,6 @@ public class Preferences {
 	public static final String AUTO_HIDE_EXTRA_KEYS = "auto_hide_extra_keys";
 	public static final String HIDE_NATIVE_SUGGESTIONS = "hide_native_suggestions";
 	public static final String LAST_OPENED_SHADER = "last_opened_shader";
-	public static final String PENDING_CRASH_SHADER = "pending_crash_shader";
 
 	private static final int RUN_AUTO = 1;
 	private static final int RUN_MANUALLY = 2;
@@ -87,7 +86,6 @@ public class Preferences {
 	private boolean autoHideExtraKeys = true;
 	private boolean hideNativeSuggestions = true;
 	private String defaultFont;
-	private long pendingCrashShaderId = 0;
 
 	public void init(Context context) {
 		systemBarColor = ContextCompat.getColor(
@@ -176,9 +174,6 @@ public class Preferences {
 		lastOpenedShaderId = preferences.getLong(
 				LAST_OPENED_SHADER,
 				lastOpenedShaderId);
-		pendingCrashShaderId = preferences.getLong(
-				PENDING_CRASH_SHADER,
-				pendingCrashShaderId);
 	}
 
 	public boolean autoHideExtraKeys() {
@@ -187,17 +182,6 @@ public class Preferences {
 
 	public boolean hideNativeSuggestions() {
 		return hideNativeSuggestions;
-	}
-
-	public long getPendingCrashShaderId() {
-		return pendingCrashShaderId;
-	}
-
-	public void setPendingCrashShaderId(long shaderId) {
-		pendingCrashShaderId = shaderId;
-		preferences.edit()
-				.putLong(PENDING_CRASH_SHADER, shaderId)
-				.apply();
 	}
 
 	private @NonNull Typeface loadFont(

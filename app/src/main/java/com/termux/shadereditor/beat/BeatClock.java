@@ -75,6 +75,19 @@ public final class BeatClock {
 	public static final int SOURCE_NONE = 0;
 	public static final int SOURCE_LIVE = 1;
 	public static final int SOURCE_MAP = 2;
+	public static final int SOURCE_TAP = 3;
+
+	// Tap tempo (scope.md 2026-10-10): 8 taps whose intervals all sit within
+	// TAP_TOL of their median set tempo + phase (two bars of 4/4). Held until a
+	// cached song takes over, the song changes, or the audio goes properly
+	// silent for SILENCE_S (the gap between songs).
+	private static final int TAP_MIN = 8;
+	private static final int TAP_MAX = 16;
+	private static final double TAP_TOL = 0.10;
+	private static final long TAP_GAP_NS = 2_500_000_000L;
+	private static final double SILENCE_S = 1.5;
+	private static final double SILENCE_DB = 24.0;  // below the running music level
+	private static final double HEARD_DB = 12.0;    // within this of it = music is playing
 
 	/** Immutable snapshot for the render thread. */
 	public static final class State {
@@ -139,6 +152,20 @@ public final class BeatClock {
 		return state;
 	}
 
+	/** A touch-down at {@code nanos} (System.nanoTime base); any thread. */
+	public static void tap(long nanos) {
+		BeatClock c = instance;
+		if (c != null && c.running) {
+			c.tapQueue.add(nanos);
+		}
+	}
+
+	/** Mic level (0..1 amplitude) while a shader has the mic open; any thread. */
+	public void feedMic(float amplitude, long nanos) {
+		micAmp = amplitude;
+		micNanos = nanos;
+	}
+
 	private void start() {
 		running = true;
 		thread = new Thread(this::run, "BeatClock");
@@ -188,6 +215,21 @@ public final class BeatClock {
 	private long lastLog;
 	private long lastFrameNanos;
 
+	private final java.util.concurrent.ConcurrentLinkedQueue<Long> tapQueue =
+			new java.util.concurrent.ConcurrentLinkedQueue<>();
+	private final java.util.ArrayList<Long> taps = new java.util.ArrayList<>();
+	private boolean tapActive;
+	private long tapT0;
+	private double tapPeriodNs;
+	private boolean tapHeard;
+	private long silentSince;
+	private double musicPeakDb = -120.0;
+	private long lastLevelNanos;
+	private float frameRms;
+	private volatile float micAmp;
+	private volatile long micNanos;
+	private String tapLabel = "";
+
 	private void run() {
 		openLog();
 		long sleepMs = 8;
@@ -198,7 +240,9 @@ public final class BeatClock {
 					lastSessionPoll = now;
 					pollSession();
 				}
+				processTaps(now);
 				int fed = feedFrames(now);
+				watchSilence(now);
 				if (fed == 0 && now - lastFrameNanos > 100_000_000L) {
 					// Nothing playing through JDSP: flywheel at the last tempo
 					// (a silent frame = zero onset), like the desktop does
@@ -257,6 +301,7 @@ public final class BeatClock {
 			fed++;
 		}
 		lastSeq = seq;
+		frameRms = bands.getFloat(HDR_OFF + 28);
 		if (fed > 0) {
 			lastFrameNanos = now;
 			publish(now);
@@ -281,17 +326,23 @@ public final class BeatClock {
 
 	private void publish(long now) {
 		int source = matched != null ? SOURCE_MAP
+				: tapActive ? SOURCE_TAP
 				: tracker.conf() > BeatTracker.CONF_GATE ? SOURCE_LIVE
 				: SOURCE_NONE;
 		state = new State(tracker.count(), 1.0 / Math.max(tracker.tbeat(), 1e-3),
 				tracker.bpm(), tracker.conf(), source, now);
 	}
 
-	/** beat_session.py _update: steer from the map while one is matched. */
+	/** beat_session.py _update: steer from the map while one is matched, else from taps. */
 	private void steer(long now) {
 		if (matched == null || playback == null ||
 				playback.getState() != PlaybackState.STATE_PLAYING) {
-			tracker.clearReference();
+			if (tapActive) {
+				double beats = (now - tapT0) / tapPeriodNs;
+				tracker.setReference(BeatTracker.mod(beats, 1.0), tapPeriodNs / 1e9);
+			} else {
+				tracker.clearReference();
+			}
 			return;
 		}
 		double t = songPosition() - offsetS;
@@ -340,6 +391,121 @@ public final class BeatClock {
 		return new double[]{count, BeatTracker.mod(count, 1.0), tbeat};
 	}
 
+	// --- tap tempo ---
+
+	private void processTaps(long now) {
+		Long t;
+		boolean added = false;
+		while ((t = tapQueue.poll()) != null) {
+			if (!taps.isEmpty() && t - taps.get(taps.size() - 1) > TAP_GAP_NS) {
+				taps.clear();
+			}
+			taps.add(t);
+			if (taps.size() > TAP_MAX) {
+				taps.remove(0);
+			}
+			added = true;
+		}
+		if (!added || taps.size() < TAP_MIN) {
+			return;
+		}
+		// The longest run of trailing taps (>= TAP_MIN) whose intervals all fit.
+		int n = taps.size();
+		int use = 0;
+		for (int k = n; k >= TAP_MIN; k--) {
+			double[] iv = new double[k - 1];
+			for (int i = 0; i < k - 1; i++) {
+				iv[i] = taps.get(n - k + i + 1) - taps.get(n - k + i);
+			}
+			double[] sorted = iv.clone();
+			java.util.Arrays.sort(sorted);
+			double med = sorted[sorted.length / 2];
+			boolean ok = med > 0;
+			for (double v : iv) {
+				ok &= Math.abs(v - med) <= TAP_TOL * med;
+			}
+			if (ok) {
+				use = k;
+				break;
+			}
+		}
+		if (use == 0) {
+			return;
+		}
+		// Least-squares grid through the taps: time = t0 + i * period.
+		double sx = 0, sy = 0, sxx = 0, sxy = 0;
+		long base = taps.get(n - use);
+		for (int i = 0; i < use; i++) {
+			double y = taps.get(n - use + i) - base;
+			sx += i;
+			sy += y;
+			sxx += (double) i * i;
+			sxy += i * y;
+		}
+		double period = (use * sxy - sx * sy) / (use * sxx - sx * sx);
+		double bpm = 60e9 / period;
+		if (bpm < BeatTracker.BPM_MIN || bpm > BeatTracker.BPM_MAX) {
+			return;
+		}
+		tapPeriodNs = period;
+		tapT0 = base + (long) ((sy - period * sx) / use);
+		if (!tapActive) {
+			tapHeard = false;
+			silentSince = 0;
+		}
+		tapActive = true;
+		tapLabel = String.format(Locale.US, "tap %.1f BPM (%d taps)", bpm, use);
+		Log.i(TAG, tapLabel);
+	}
+
+	private void clearTap(String why) {
+		if (tapActive) {
+			Log.i(TAG, "tap tempo cleared: " + why);
+			tapLabel = "tap cleared: " + why;
+		}
+		tapActive = false;
+		taps.clear();
+	}
+
+	// "Clear reset" (user): the audio going properly silent for SILENCE_S --
+	// relative to the running music level, so a quiet break doesn't count.
+	// Level = JDSP's frame rms while frames flow, else the mic while a shader
+	// has it open; frames that STOP after flowing count as silence too.
+	private void watchSilence(long now) {
+		if (!tapActive) {
+			musicPeakDb = -120.0;
+			return;
+		}
+		double level;
+		boolean framesLive = now - lastFrameNanos < 200_000_000L && lastSeq > 0;
+		boolean micLive = now - micNanos < 500_000_000L;
+		if (framesLive) {
+			level = 20.0 * Math.log10(Math.max(frameRms, 1e-7f));
+		} else if (micLive) {
+			level = 20.0 * Math.log10(Math.max(micAmp, 1e-7f));
+		} else if (tapHeard) {
+			level = -140.0; // the stream we were hearing stopped
+		} else {
+			return;
+		}
+		double dt = lastLevelNanos == 0 ? 0 : Math.min((now - lastLevelNanos) / 1e9, 0.1);
+		lastLevelNanos = now;
+		musicPeakDb = Math.max(level, musicPeakDb - 0.5 * dt);
+		if (level > musicPeakDb - HEARD_DB) {
+			tapHeard = true;
+		}
+		if (tapHeard && level < musicPeakDb - SILENCE_DB) {
+			if (silentSince == 0) {
+				silentSince = now;
+			} else if ((now - silentSince) / 1e9 >= SILENCE_S) {
+				clearTap("silence");
+				silentSince = 0;
+			}
+		} else {
+			silentSince = 0;
+		}
+	}
+
 	// --- media session + cache ---
 
 	private void pollSession() {
@@ -380,6 +546,7 @@ public final class BeatClock {
 		}
 		sessionKey = key;
 		matched = match(artist, title, durMs / 1000.0);
+		clearTap("song changed");
 		matchedLabel = playing.getPackageName() + " '" + artist + " - " + title + "' " +
 				(matched != null
 						? String.format(Locale.US, "-> map %.1f BPM (%s - %s)",
@@ -553,7 +720,7 @@ public final class BeatClock {
 		lastLog = now;
 		State s = state;
 		double pos = playback != null ? songPosition() : -1;
-		log.printf(Locale.US, "%.3f\t%d\t%.2f\t%.3f\t%.3f\t%.3f\t%s%n",
-				now / 1e9, s.source, s.bpm, s.conf, s.count, pos, matchedLabel);
+		log.printf(Locale.US, "%.3f\t%d\t%.2f\t%.3f\t%.3f\t%.3f\t%s\t%s%n",
+				now / 1e9, s.source, s.bpm, s.conf, s.count, pos, matchedLabel, tapLabel);
 	}
 }
