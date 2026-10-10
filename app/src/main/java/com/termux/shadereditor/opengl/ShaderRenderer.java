@@ -69,6 +69,13 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public static final String UNIFORM_MEDIA_VOLUME = "mediaVolume";
 	public static final String UNIFORM_MIC_AMPLITUDE = "micAmplitude";
 	public static final String UNIFORM_MPV_AUDIO_LEVEL = "mpvAudioLevel";
+	// Beat clock (beat/BeatClock.java): continuous count (wraps at 1024),
+	// phase 0..1, confidence 0..1, BPM, source 0 none / 1 live / 2 cached map.
+	public static final String UNIFORM_BEAT_COUNT = "beatCount";
+	public static final String UNIFORM_BEAT_PHASE = "beatPhase";
+	public static final String UNIFORM_BEAT_CONF = "beatConf";
+	public static final String UNIFORM_BEAT_BPM = "beatBpm";
+	public static final String UNIFORM_BEAT_SOURCE = "beatSource";
 	public static final String UNIFORM_TOUCH = "touch";
 	public static final String UNIFORM_TOUCH_START = "touchStart";
 

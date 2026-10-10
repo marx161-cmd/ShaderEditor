@@ -1,5 +1,7 @@
 package com.termux.shadereditor.opengl;
 
+import com.termux.shadereditor.beat.BeatClock;
+
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -119,6 +121,13 @@ final class BuiltinSystemUniforms {
 	private final float[] bandsData = new float[108];
 	private long lastBandsUpload;
 	private static final long BANDS_UPDATE_INTERVAL = 33333333L; // ~30Hz (ns)
+	// Shared beat clock, held only while a shader uses a beat uniform.
+	private boolean hasBeat;
+	// Written from the UI thread (release on pause) and the GL thread
+	// (configure/apply), so volatile; apply() re-acquires after a pause,
+	// because a resume that keeps the GL surface never re-runs configure().
+	@Nullable
+	private volatile BeatClock beatClock;
 
 	BuiltinSystemUniforms(@NonNull Context context) {
 		this.context = context;
@@ -182,6 +191,21 @@ final class BuiltinSystemUniforms {
 				device,
 				programs,
 				ShaderRenderer.UNIFORM_SCREEN_LOCKED);
+		hasBeat = false;
+		for (String name : new String[]{
+				ShaderRenderer.UNIFORM_BEAT_COUNT,
+				ShaderRenderer.UNIFORM_BEAT_PHASE,
+				ShaderRenderer.UNIFORM_BEAT_CONF,
+				ShaderRenderer.UNIFORM_BEAT_BPM,
+				ShaderRenderer.UNIFORM_BEAT_SOURCE}) {
+			hasBeat |= anyHasUniform(device, programs, name);
+		}
+		if (hasBeat && beatClock == null) {
+			beatClock = BeatClock.acquire(context);
+		} else if (!hasBeat && beatClock != null) {
+			BeatClock.release();
+			beatClock = null;
+		}
 
 		bridgeUniformPresence.clear();
 		for (String key : readAudioBridge().keySet()) {
@@ -213,6 +237,20 @@ final class BuiltinSystemUniforms {
 
 	void apply(@NonNull ProgramBindings bindings, long now) {
 		applyBandsTexture(bindings, now);
+		if (hasBeat && beatClock == null) {
+			beatClock = BeatClock.acquire(context);
+		}
+		BeatClock clock = beatClock;
+		if (clock != null) {
+			BeatClock.State beat = clock.state();
+			double count = beat.countAt(now);
+			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_COUNT, (float) count);
+			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_PHASE,
+					(float) (count - Math.floor(count)));
+			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_CONF, (float) beat.conf);
+			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_BPM, (float) beat.bpm);
+			bindings.setInt(ShaderRenderer.UNIFORM_BEAT_SOURCE, beat.source);
+		}
 		if (hasNightMode) {
 			bindings.setInt(ShaderRenderer.UNIFORM_NIGHT_MODE, nightMode);
 		}
@@ -325,6 +363,10 @@ final class BuiltinSystemUniforms {
 	}
 
 	void release() {
+		if (beatClock != null) {
+			BeatClock.release();
+			beatClock = null;
+		}
 		if (micInputListener != null) {
 			micInputListener.unregister();
 			micInputListener = null;

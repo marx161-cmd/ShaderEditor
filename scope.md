@@ -405,3 +405,31 @@ Decided (user OK'd my design):
 - Beat clock: SKIPPED for now (user). JDSP meter fix comes after this patch, tested as a sideloaded overlay like
   other test builds.
 Shaders without compute sections must behave exactly as before.
+
+## 2026-10-10 — phone beat clock: desktop beat-map cache first, live tracker as fallback (user)
+
+Input fixed first: JDSP's meter now runs continuously and publishes 60 Hz frames into a v2 bands.bin (latest 108
+floats + header + 32-frame ring; JamesDSP-src scripts/bands_bin_check.py). Live overlay test 2026-10-10: 59.99 Hz.
+Findings (offline replay of two recorded phone sessions, desktop beat_track.py unchanged):
+- The live tracker on the phone's full-mix bands is NOT solid: its confidence formula (best/mean score) breaks when
+  the mean score sits near zero (dense full-mix ODF), and single 8 s windows wander. Desktop HPSS (stem_split.py)
+  did NOT help on phone input. What helped: confidence from the score spread + 8 s autocorrelation averaging
+  (TODESFLOETE 100% on its tempo; GARGAMEL 66%, a 3:4 ambiguity).
+- The desktop cache (~/.local/share/shader-backdrop/tracks.db, 807 tracks, all with beat maps) has both test songs
+  and shows the live tracker was on a 3:2 / 3:4 sub-grid even when "solid" (TODESFLOETE 119.6, GARGAMEL 100.2).
+Decided (user): use the desktop cache on the phone.
+- comrade exports the beat maps to the phone (a sync script, like docs-sync-pixel). Keys as on the desktop:
+  `meta:artist|title|duration_us` (YouTube Music -- the user's usual source; the phone's YT Music app and Firefox YT
+  Music play the same streams, so song positions line up), `file:` (VLC music videos, same files as comrade --
+  match by filename), `yt:` if the phone ever exposes a video id.
+- ShaderEditor reads the active media session (its existing NotificationListener grants MediaSessionManager access):
+  title/artist/duration + playback position. Matching and the duration tolerance are PORTED from beat_session.py, not
+  re-invented; a matched map feeds the same PLL as the desktop's set_reference (continuous count, never jumps).
+- No match -> the live tracker (beat_track.py ported to Java with the two fixes above, phone only; the desktop file
+  stays unchanged because its drum-stem input doesn't hit these problems).
+- Uniforms: beatCount, beatPhase, beatConf, beatBpm, + a source flag (0 none / 1 live / 2 map) for debugging.
+  A debug shader shows the flash so the user can judge phase on screen.
+Known open items: (1) com.termux.vlc reports position=0 in its media session -> needs a fix in the VLC fork before
+file: matches can give phase; (2) output latency (speaker vs Bluetooth) between player position and what is heard
+-> a tunable offset, judged on screen; (3) a map from a different upload of the same song could be offset -> check
+map phase against live onsets before trusting it (later, if it shows).
