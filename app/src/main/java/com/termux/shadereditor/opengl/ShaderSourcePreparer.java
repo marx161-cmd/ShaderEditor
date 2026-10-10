@@ -185,8 +185,14 @@ final class ShaderSourcePreparer {
 		Map<String, DiscoveredSampler> userSamplers = new LinkedHashMap<>();
 		List<PreparedShaderSource.PreparedSection> sections = new ArrayList<>();
 
+		// The app consumes the IMAGE_ lines; some GLSL compilers (PowerVR)
+		// reject "16384x1" even in an unused #define body, so comment them
+		// out (same line, so line numbers don't move).
+		String compiledPreamble = PATTERN_IMAGE.matcher(preamble)
+				.replaceAll(match -> Matcher.quoteReplacement(
+						"// " + match.group().replaceFirst("^#", "")));
 		for (ShaderSectionParser.Section section : parsed.sections()) {
-			String compiledSource = preamble + section.body();
+			String compiledSource = compiledPreamble + section.body();
 			if (section.isCompute()) {
 				if (gles3Version == null) {
 					errors.add(ShaderError.createGeneral(
