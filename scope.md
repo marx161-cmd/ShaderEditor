@@ -454,3 +454,35 @@ during load. Today it only ever fired on blazer-sysapp-update install kills (am_
 real crash, and since v95 it rewrote the user's own ~/shaders file. Decided (user): drop it wholesale -- a shader
 that genuinely crash-loops the app is now fixed or moved out of ~/shaders from Termux. Removed in v102 (pending-
 crash pref, ShaderManager tracking, string).
+
+## 2026-10-10 — desktop "go" signal: the phone plays the cached map for the song playing on comrade (user)
+
+Use case (user): music playing on comrade (YT Music in LibreWolf / VLC, heard through the Oppo speaker) has a
+cached beat map and a known output delay, so the phone should not have to track or be tapped -- comrade tells it
+"this song started at T" and the phone plays the cached map from there.
+Decided (user):
+- SIMPLE: one "go" per song start, then the phone plays that map to the end of the song. No periodic re-sync, no
+  seek handling (user skips within a song rarely). A pause/resume shows up as end+start on comrade, so it re-sends.
+  A "stop" is sent when nothing is playing any more.
+- Transport: reuse MQTT, no new UDP path. comrade publishes; a Cybersyn profile (MQTT event) runs `file.write` into
+  Cybersyn's user_files; ShaderEditor's clock thread picks the file up on its existing 500 ms poll. Delivery latency
+  does not matter because the message carries an absolute start time (and the Oppo delay leaves ~0.9 s headroom).
+- Accurate start time is the one thing that must be right (user: "if we get accurate start time we can be lazy with
+  the rest"). Measured 2026-10-10: LibreWolf's MPRIS position is whole seconds and steps cleanly every 1.000 s, so
+  comrade fast-polls at song start and anchors on the step edge (~15 ms). Precise players (VLC) are used directly.
+- Clocks: the phone's wall clock was measured 0.25-0.5 s off comrade's (comrade is NTP-exact), so the sender
+  measures the phone's clock offset itself (persistent SSH, best of several round trips) and sends the start time
+  in PHONE wall-clock ms, already including the Oppo delay (VIDEO_DELAY_MS from ~/.config/oppo-av-sync.env).
+- Lookup by the exact desktop key (yt:/file:/meta:) in beatmaps.json's `keys`, same gates as the phone match
+  (coverage, confidence, meta duration rule).
+- Priority (user): phone media session (matched map) > desktop go > tap > live. beatSource 4 = desktop.
+- beat_offset_ms.txt still applies on top as a fine trim.
+
+## 2026-10-10 — desktop go signal DEFERRED behind the song-cache redesign (user)
+
+Found while scoping the entry above: 721 of 733 browser-learned desktop maps are warped by coarse MPRIS positions
+(details: shader-backdrop scope.md 2026-10-10 "song cache REDESIGN"). An exact start time can't fix a warped map, so
+the user chose to redo the cache (real audio via yt-dlp + offline analysis, richer features). The go signal as
+decided above (MQTT -> Cybersyn file.write -> clock thread, phone-clock start time, priority phone session > desktop
+> tap > live) is unchanged; it becomes "start this song's feature timeline at T" and is built in that project's
+step 4.
