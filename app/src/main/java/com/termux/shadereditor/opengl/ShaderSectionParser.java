@@ -1,6 +1,7 @@
 package com.termux.shadereditor.opengl;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,17 @@ import java.util.regex.Pattern;
  *       small data/register-file buffers.</li>
  * </ul>
  *
+ * Compute kernels (GLES 3.1+) use their own delimiter:
+ *
+ * <pre>==compute name size [xN] [@updateRate]==</pre>
+ *
+ * <ul>
+ *   <li>{@code size}: total threads, {@code 512}, {@code 512x64} or
+ *       {@code 64x64x64}, or the name of a declared image (dispatch over
+ *       its size).</li>
+ *   <li>{@code xN}: run N times per frame, {@code uniform int pass} = 0..N-1.</li>
+ * </ul>
+ *
  * Everything before the first delimiter is the shared preamble, prepended to
  * every section's compiled source. No delimiter anywhere means single-pass
  * (returns zero sections) and the existing render path is used unchanged.
@@ -35,6 +47,12 @@ final class ShaderSectionParser {
 					"(?:(?:([0-9]+)[xX]([0-9]+))|([0-9]*\\.?[0-9]+))?[ \\t]*" +
 					"(?:@[ \\t]*([1-9][0-9]*)[ \\t]*)?" +
 					"==[ \\t]*$");
+	private static final Pattern COMPUTE_DELIMITER = Pattern.compile(
+			"^[ \\t]*==[ \\t]*compute[ \\t]+([A-Za-z_]\\w*)[ \\t]+" +
+					"(?:([0-9]+(?:[xX][0-9]+){0,2})|([A-Za-z_]\\w*))" +
+					"(?:[ \\t]+[xX]([1-9][0-9]*))?[ \\t]*" +
+					"(?:@[ \\t]*([1-9][0-9]*)[ \\t]*)?" +
+					"==[ \\t]*$");
 
 	record Section(
 			@NonNull String name,
@@ -44,7 +62,11 @@ final class ShaderSectionParser {
 			int fixedHeight,
 			int updateRate,
 			int delimiterLine,
-			@NonNull String body) {
+			@NonNull String body,
+			boolean isCompute,
+			@NonNull int[] threads,
+			@Nullable String sizeImage,
+			int repeat) {
 	}
 
 	record Parsed(
@@ -89,7 +111,11 @@ final class ShaderSectionParser {
 					delimiter.fixedHeight,
 					delimiter.updateRate,
 					delimiter.lineNumber,
-					body));
+					body,
+					delimiter.isCompute,
+					delimiter.threads,
+					delimiter.sizeImage,
+					delimiter.repeat));
 		}
 
 		return new Parsed(preamble, sections);
@@ -104,6 +130,12 @@ final class ShaderSectionParser {
 		final int lineNumber;
 		final int lineStart;
 		final int lineEnd;
+		boolean isCompute;
+		@NonNull
+		int[] threads = new int[]{1, 1, 1};
+		@Nullable
+		String sizeImage;
+		int repeat = 1;
 
 		Delimiter(
 				String name,
@@ -138,8 +170,35 @@ final class ShaderSectionParser {
 			if (line.endsWith("\r")) {
 				line = line.substring(0, line.length() - 1);
 			}
+			Matcher compute = COMPUTE_DELIMITER.matcher(line);
 			Matcher matcher = DELIMITER.matcher(line);
-			if (matcher.matches()) {
+			if (compute.matches()) {
+				Delimiter delimiter = new Delimiter(
+						compute.group(1),
+						1f,
+						0,
+						0,
+						compute.group(5) != null
+								? Integer.parseInt(compute.group(5))
+								: 1,
+						lineNumber,
+						lineStart,
+						lineEnd);
+				delimiter.isCompute = true;
+				if (compute.group(2) != null) {
+					String[] parts = compute.group(2).split("[xX]");
+					for (int i = 0; i < parts.length; ++i) {
+						delimiter.threads[i] = Math.max(1,
+								Integer.parseInt(parts[i]));
+					}
+				} else {
+					delimiter.sizeImage = compute.group(3);
+				}
+				if (compute.group(4) != null) {
+					delimiter.repeat = Integer.parseInt(compute.group(4));
+				}
+				delimiters.add(delimiter);
+			} else if (matcher.matches()) {
 				String name = matcher.group(1);
 				int fixedWidth = matcher.group(2) != null
 						? Integer.parseInt(matcher.group(2))

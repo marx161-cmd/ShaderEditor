@@ -379,3 +379,29 @@ Design (mine, flagged):
 - The shaders table in shaders.db is left in place, read only by the one-time migration. Textures stay in the DB.
 - The unused `project/FolderShaderProjectSource` multi-file scaffolding (pre-07-25 checkpoint) is NOT used for
   this; one flat file per shader.
+
+## 2026-10-10 — GLES compute stage (phone-native) (user OK'd the design)
+
+Goal: real GPU simulation on the phone (swarm boids first; later tonnetz-needle-style physics and small fluid sims).
+Decided (user OK'd my design):
+- Images are declared in the preamble like EXT_TEXTURE_: `#define IMAGE_<name> <fmt> <W>x<H>[x<D>] [swap]`
+  (also `full` = surface x quality). fmt: rgba32f rgba16f r32f r32ui (+ r16f rgba8 if easy). Allocated with
+  glTexStorage (immutable, required for image load/store), cleared once on allocation, persistent otherwise.
+  `swap` = two copies: kernels read `<name>`, write `<name>_out`; after a section that writes `<name>_out` the pair
+  swaps. Needed because GLES only allows read+write in one kernel for r32f/r32i/r32ui images.
+- Kernel sections: `==compute <name> <size> [xN] [@rate]==`. size = threads: `512`, `512x64`, `64x64x64`, or the
+  name of a declared image (dispatch over its size). The app divides by the shader's own local_size (rounding up).
+  xN = repeat N times per frame with `uniform int pass` = 0..N-1 (substeps, red-black parity).
+- Sections run in FILE ORDER (compute dispatches, fragment buffers draw, ==image== last), with a full
+  glMemoryBarrier after every compute dispatch.
+- Each image gets a GPU unit; the app defines `<name>_UNIT` (and `<name>_out_UNIT`) macros for
+  `layout(..., binding = <name>_UNIT)`. Every pass (compute or fragment) can also read any image as a texture by
+  name (sampler2D/3D/usampler2D); linear filtering only for 16f/8-bit formats (no OES_texture_float_linear here).
+- Compute sections get `#version 320 es` (image atomics) instead of the file's version line, plus `#define COMPUTE 1`;
+  the preamble is shared, so fragment-only lines go under `#ifndef COMPUTE`. All existing uniforms (time, bands,
+  touch...) are bound in compute too.
+- NOT now: multigrid pyramids. A phone fluid port uses red-black iterations (xN) on a small grid instead; add
+  pyramids only if that looks soft on screen.
+- Beat clock: SKIPPED for now (user). JDSP meter fix comes after this patch, tested as a sideloaded overlay like
+  other test builds.
+Shaders without compute sections must behave exactly as before.

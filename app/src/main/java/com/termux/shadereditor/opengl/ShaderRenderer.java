@@ -267,6 +267,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			boolean halfFloat = device.supportsHalfFloatColorBuffer(gles3);
 			var targetErrors = renderPipeline.ensureMultipassTargets(
 					passes,
+					programManager.getComputeImages(),
 					surfaceWidth,
 					surfaceHeight,
 					quality,

@@ -40,6 +40,42 @@ final class ShaderSourcePreparer {
 					"(r32f|rgba8|rgba16f)[ \\t]+" +
 					"([0-9]+)[ \\t]+([0-9]+)[ \\t]*$",
 			Pattern.MULTILINE);
+	private static final Pattern PATTERN_IMAGE = Pattern.compile(
+			"^#define[ \\t]+IMAGE_([A-Za-z_][A-Za-z0-9_]*)[ \\t]+" +
+					"([a-z0-9]+)[ \\t]+" +
+					"(?:([0-9]+)[xX]([0-9]+)(?:[xX]([0-9]+))?|(full))" +
+					"(?:[ \\t]+(swap))?[ \\t]*$",
+			Pattern.MULTILINE);
+	private static final Pattern PATTERN_VERSION_LINE = Pattern.compile(
+			"^[ \\t]*#version[^\\n]*",
+			Pattern.MULTILINE);
+	private static final String COMPUTE_VERSION = "#version 320 es";
+	// Images have no default precision; samplers 3D/integer have none in
+	// ESSL 3.00 fragment shaders either.
+	private static final Pattern PATTERN_EXTENSION_LINE = Pattern.compile(
+			"^[ \\t]*#extension[^\\n]*\\n",
+			Pattern.MULTILINE);
+	private static final String COMPUTE_DEFINE = "#define COMPUTE 1\n";
+	private static final String COMPUTE_HEADER =
+			"precision highp float;\n" +
+					"precision highp int;\n" +
+					"precision highp image2D;\n" +
+					"precision highp image3D;\n" +
+					"precision highp uimage2D;\n" +
+					"precision highp uimage3D;\n" +
+					"precision highp iimage2D;\n" +
+					"precision highp iimage3D;\n" +
+					"precision highp sampler3D;\n" +
+					"precision highp usampler2D;\n" +
+					"precision highp usampler3D;\n" +
+					"precision highp isampler2D;\n" +
+					"precision highp isampler3D;\n";
+	private static final String FRAGMENT_IMAGE_HEADER =
+			"precision highp sampler3D;\n" +
+					"precision highp usampler2D;\n" +
+					"precision highp usampler3D;\n" +
+					"precision highp isampler2D;\n" +
+					"precision highp isampler3D;\n";
 	private static final String OES_EXTERNAL =
 			"#extension GL_OES_EGL_image_external : require\n";
 	private static final String OES_EXTERNAL_ESS3 =
@@ -64,12 +100,16 @@ final class ShaderSourcePreparer {
 		List<ExternalTextureSpec> externalTextures = parseExternalTextures(source);
 		ShaderSectionParser.Parsed parsed = ShaderSectionParser.parse(source);
 		if (parsed.isMultipass()) {
+			List<ShaderError> errors = new ArrayList<>();
+			List<ComputeImageSpec> images = parseComputeImages(source, errors);
 			return prepareMultiPass(
 					parsed,
 					gles3Version,
 					fTimeMax,
 					maxTextures,
-					externalTextures);
+					externalTextures,
+					images,
+					errors).withCompute(images, errors);
 		}
 		return prepareSinglePass(
 				source,
@@ -120,7 +160,9 @@ final class ShaderSourcePreparer {
 			@Nullable String gles3Version,
 			float fTimeMax,
 			int maxTextures,
-			@NonNull List<ExternalTextureSpec> externalTextures) {
+			@NonNull List<ExternalTextureSpec> externalTextures,
+			@NonNull List<ComputeImageSpec> images,
+			@NonNull List<ShaderError> errors) {
 		String preamble = parsed.preamble();
 		int preambleLines = preamble.isEmpty()
 				? 0
@@ -133,12 +175,30 @@ final class ShaderSourcePreparer {
 			}
 		}
 		excludedNames.add(ShaderRenderer.UNIFORM_BACKBUFFER);
+		// Images are bound by the pipeline, never user textures.
+		for (ComputeImageSpec image : images) {
+			excludedNames.add(image.name());
+			excludedNames.add(image.name() + ComputeImageSpec.OUT_SUFFIX);
+		}
+		String computeDefines = buildComputeDefines(images);
 
 		Map<String, DiscoveredSampler> userSamplers = new LinkedHashMap<>();
 		List<PreparedShaderSource.PreparedSection> sections = new ArrayList<>();
 
 		for (ShaderSectionParser.Section section : parsed.sections()) {
 			String compiledSource = preamble + section.body();
+			if (section.isCompute()) {
+				if (gles3Version == null) {
+					errors.add(ShaderError.createGeneral(
+							"compute section '" + section.name() +
+									"' needs a GLES 3 context and " +
+									"#version 300 es (or later) on line 1"));
+					continue;
+				}
+				// Same line count, so the line mapping stays valid.
+				compiledSource = PATTERN_VERSION_LINE.matcher(compiledSource)
+						.replaceFirst(COMPUTE_VERSION);
+			}
 			ShaderLineMapping lineMapping = ShaderLineMapping.identity()
 					.withSectionOffset(
 							preambleLines,
@@ -160,6 +220,13 @@ final class ShaderSourcePreparer {
 			if (!input.getSource().contains(SHADER_EDITOR)) {
 				input = addPreprocessorDirective(input, SHADER_EDITOR);
 			}
+			if (section.isCompute()) {
+				input = addPreprocessorDirective(input,
+						COMPUTE_DEFINE + computeDefines);
+				input = addAfterExtensions(input, COMPUTE_HEADER);
+			} else if (!images.isEmpty() && gles3Version != null) {
+				input = addAfterExtensions(input, FRAGMENT_IMAGE_HEADER);
+			}
 
 			for (DiscoveredSampler sampler : sectionSamplers) {
 				if (userSamplers.size() < maxTextures) {
@@ -175,7 +242,11 @@ final class ShaderSourcePreparer {
 					section.fixedHeight(),
 					section.updateRate(),
 					input,
-					sectionSamplers));
+					sectionSamplers,
+					section.isCompute(),
+					section.threads(),
+					section.sizeImage(),
+					section.repeat()));
 		}
 
 		return PreparedShaderSource.multiPass(
@@ -302,6 +373,106 @@ final class ShaderSourcePreparer {
 					height));
 		}
 		return specs;
+	}
+
+	@NonNull
+	private static List<ComputeImageSpec> parseComputeImages(
+			@NonNull String source,
+			@NonNull List<ShaderError> errors) {
+		List<ComputeImageSpec> images = new ArrayList<>();
+		Set<String> names = new HashSet<>();
+		Matcher matcher = PATTERN_IMAGE.matcher(source);
+		while (matcher.find()) {
+			String name = matcher.group(1);
+			ComputeImageSpec.Format format =
+					ComputeImageSpec.Format.parse(matcher.group(2));
+			if (format == null) {
+				errors.add(ShaderError.createGeneral("IMAGE_" + name +
+						": unknown format '" + matcher.group(2) +
+						"' (rgba32f rgba16f rgba8 r32f r16f r32ui r32i)"));
+				continue;
+			}
+			if (!names.add(name)) {
+				errors.add(ShaderError.createGeneral(
+						"IMAGE_" + name + " declared twice"));
+				continue;
+			}
+			boolean full = matcher.group(6) != null;
+			int width = full ? 0 : Integer.parseInt(matcher.group(3));
+			int height = full ? 0 : Integer.parseInt(matcher.group(4));
+			int depth = matcher.group(5) != null
+					? Integer.parseInt(matcher.group(5))
+					: 1;
+			if (!full && (width < 1 || height < 1 || depth < 1)) {
+				errors.add(ShaderError.createGeneral(
+						"IMAGE_" + name + ": size must be at least 1"));
+				continue;
+			}
+			images.add(new ComputeImageSpec(
+					name,
+					format,
+					width,
+					height,
+					depth,
+					full,
+					matcher.group(7) != null));
+		}
+		return images;
+	}
+
+	// <name>_UNIT macros for layout(binding = ...): each image (and its
+	// _out copy) gets the image unit the pipeline binds it to.
+	@NonNull
+	private static String buildComputeDefines(
+			@NonNull List<ComputeImageSpec> images) {
+		StringBuilder sb = new StringBuilder();
+		int unit = 0;
+		for (ComputeImageSpec image : images) {
+			sb.append("#define ").append(image.name())
+					.append(ComputeImageSpec.UNIT_SUFFIX).append(' ')
+					.append(unit++).append('\n');
+			if (image.swap()) {
+				sb.append("#define ").append(image.name())
+						.append(ComputeImageSpec.OUT_SUFFIX)
+						.append(ComputeImageSpec.UNIT_SUFFIX).append(' ')
+						.append(unit++).append('\n');
+			}
+		}
+		return sb.toString();
+	}
+
+	static int countImageUnits(@NonNull List<ComputeImageSpec> images) {
+		int units = 0;
+		for (ComputeImageSpec image : images) {
+			units += image.swap() ? 2 : 1;
+		}
+		return units;
+	}
+
+	// Precision statements are not preprocessor lines, so they must follow
+	// every #extension directive.
+	@NonNull
+	private static PreparedShaderInput addAfterExtensions(
+			@NonNull PreparedShaderInput input,
+			@NonNull String text) {
+		String source = input.getSource();
+		int insertAt = -1;
+		Matcher matcher = PATTERN_EXTENSION_LINE.matcher(source);
+		while (matcher.find()) {
+			insertAt = matcher.end();
+		}
+		if (insertAt < 0) {
+			return addPreprocessorDirective(input, text);
+		}
+		// Earlier insertions all sit right after #version, i.e. above
+		// this point, so subtract them to get the original line.
+		int sourceLine = countSourceLines(source, insertAt) -
+				input.getLineMapping().insertedLineCount();
+		return new PreparedShaderInput(
+				source.substring(0, insertAt) + text + source.substring(insertAt),
+				input.getLineMapping().addInsertedLinesAfterSourceLine(
+						sourceLine,
+						countLines(text)));
 	}
 
 	@NonNull

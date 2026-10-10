@@ -37,7 +37,11 @@ final class RendererProgramManager {
 			int fixedHeight,
 			int updateRate,
 			@NonNull GlProgram program,
-			@NonNull ProgramBindings bindings) {
+			@NonNull ProgramBindings bindings,
+			boolean isCompute,
+			@NonNull int[] threads,
+			@Nullable String sizeImage,
+			int repeat) {
 	}
 
 	private static final String FULL_SCREEN_VERTEX_SHADER = """
@@ -167,12 +171,41 @@ final class RendererProgramManager {
 				version);
 
 		List<PassProgram> passes = new ArrayList<>();
-		List<ShaderError> programErrors = new ArrayList<>();
+		List<ShaderError> programErrors = new ArrayList<>(
+				preparedShaderSource.getErrors());
+		var images = preparedShaderSource.getComputeImages();
+		if (!images.isEmpty()) {
+			int units = ShaderSourcePreparer.countImageUnits(images);
+			int maxUnits = device.supportsCompute()
+					? device.getMaxImageUnits()
+					: 0;
+			if (units > maxUnits) {
+				programErrors.add(ShaderError.createGeneral(
+						units + " image units declared (swap images count " +
+								"twice), this GPU has " + maxUnits));
+			}
+		}
 		for (var section : preparedShaderSource.getSections()) {
-			var result = device.createProgram(
-					vertexShader,
-					section.fragmentShader().getSource(),
-					section.fragmentShader().getLineMapping());
+			if (section.sizeImage() != null && images.stream().noneMatch(
+					image -> image.name().equals(section.sizeImage()))) {
+				programErrors.add(ShaderError.createGeneral(
+						"compute section '" + section.name() +
+								"': no IMAGE_" + section.sizeImage() +
+								" declared to size it"));
+			}
+		}
+		if (!programErrors.isEmpty()) {
+			return ReloadResult.failure(textureErrors, programErrors);
+		}
+		for (var section : preparedShaderSource.getSections()) {
+			var result = section.isCompute()
+					? device.createComputeProgram(
+							section.fragmentShader().getSource(),
+							section.fragmentShader().getLineMapping())
+					: device.createProgram(
+							vertexShader,
+							section.fragmentShader().getSource(),
+							section.fragmentShader().getLineMapping());
 			if (!result.succeeded() || result.getProgram() == null) {
 				programErrors.addAll(result.getInfoLog());
 				for (var pass : passes) {
@@ -188,7 +221,11 @@ final class RendererProgramManager {
 					section.fixedHeight(),
 					section.updateRate(),
 					result.getProgram(),
-					new ProgramBindings(result.getProgram())));
+					new ProgramBindings(result.getProgram()),
+					section.isCompute(),
+					section.threads(),
+					section.sizeImage(),
+					section.repeat()));
 		}
 
 		passPrograms = List.copyOf(passes);
@@ -232,6 +269,11 @@ final class RendererProgramManager {
 	@NonNull
 	ShaderTextureResources getTextureResources() {
 		return textureResources;
+	}
+
+	@NonNull
+	List<ComputeImageSpec> getComputeImages() {
+		return preparedShaderSource.getComputeImages();
 	}
 
 	@NonNull

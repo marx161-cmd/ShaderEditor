@@ -6,6 +6,7 @@ final class GlStateCache {
 	private final int[] texture2dBindings;
 	private final int[] cubemapBindings;
 	private final int[] externalTextureBindings;
+	private final int[] texture3dBindings;
 	int currentProgramId = -1;
 	int currentFramebufferId = -1;
 	int activeTextureUnit = -1;
@@ -18,6 +19,7 @@ final class GlStateCache {
 		texture2dBindings = new int[maxTextureUnits];
 		cubemapBindings = new int[maxTextureUnits];
 		externalTextureBindings = new int[maxTextureUnits];
+		texture3dBindings = new int[maxTextureUnits];
 		reset();
 	}
 
@@ -25,6 +27,7 @@ final class GlStateCache {
 		Arrays.fill(texture2dBindings, 0);
 		Arrays.fill(cubemapBindings, 0);
 		Arrays.fill(externalTextureBindings, 0);
+		Arrays.fill(texture3dBindings, 0);
 		currentProgramId = -1;
 		currentFramebufferId = -1;
 		activeTextureUnit = -1;
@@ -42,6 +45,8 @@ final class GlStateCache {
 				return cubemapBindings;
 			case android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES:
 				return externalTextureBindings;
+			case android.opengl.GLES30.GL_TEXTURE_3D:
+				return texture3dBindings;
 			default:
 				throw new IllegalArgumentException("Unsupported texture target: " + target);
 		}
@@ -51,6 +56,7 @@ final class GlStateCache {
 		clearTextureId(texture2dBindings, textureId);
 		clearTextureId(cubemapBindings, textureId);
 		clearTextureId(externalTextureBindings, textureId);
+		clearTextureId(texture3dBindings, textureId);
 	}
 
 	private static void clearTextureId(int[] bindings, int textureId) {

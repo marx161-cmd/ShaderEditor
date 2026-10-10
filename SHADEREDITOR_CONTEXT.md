@@ -60,6 +60,24 @@ Feedback: `uniform sampler2D backbuffer;` (single-pass only, previous frame).
 
 Quaternion/state packing (for trackball spin or feedback state): `pack16`/`unpack16` (0..1 in two 8-bit channels), `encS`/`decS` (-range..range in two 8-bit channels), `quatMul`, `quatToMat3`, `quatSlerp`. Analytic geometry: ray-sphere (`intersectSphere`), ray-ellipsoid, ray-plane→annulus (rings/disks). `blackbody(t)` for star colours (t in hundreds of Kelvin).
 
+## Compute sections (GLES 3.1+, since v96 — scope.md 2026-10-10)
+
+Example: `compute_test.glsl` in the repo root (particles + atomic splat).
+- Declare storage images in the preamble: `#define IMAGE_<name> <fmt> <W>x<H>[x<D>]|full [swap]`
+  (fmt: rgba32f rgba16f rgba8 r32f r16f r32ui r32i; `full` = surface × quality). Cleared once, persistent.
+  `swap` = two copies: read `<name>`, write `<name>_out`; swapped after every dispatch that uses `<name>_out`
+  (GLES only allows read+write in one kernel for r32f/r32i/r32ui).
+- Kernel: `==compute <name> <threads|imageName> [xN] [@rate]==`, threads = `512`, `512x64`, `64x64x64`; the app
+  divides by the kernel's `local_size`. `xN` repeats with `uniform int pass` = 0..N-1. Sections run in file order,
+  full memory barrier after each dispatch.
+- Bind images with `layout(<fmt>, binding = <name>_UNIT)` (and `<name>_out_UNIT`), give them `highp`.
+- Any pass can sample an image by name (`uniform highp usampler2D glow;` / sampler3D …) and gets `<name>Res`.
+  Linear filtering only for 16f/8-bit formats.
+- Compute gets `#version 320 es` + `#define COMPUTE 1` + highp defaults; the preamble is shared, so put
+  fragment-only lines under `#ifndef COMPUTE` and `out vec4 fragColor;` in the image body.
+- Not supported: multigrid pyramids (use red-black `xN` iterations). `@rate` works for compute only
+  (it was never implemented for fragment buffers).
+
 ## Performance rules (must stay cheap as a wallpaper)
 
 - Prefer **analytic** (closed-form) intersections over raymarching: a sphere/ellipsoid/ring is one quadratic or dot+sqrt; a march loop is what kills framerate.

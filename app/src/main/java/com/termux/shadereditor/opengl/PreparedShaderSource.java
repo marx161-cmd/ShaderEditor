@@ -14,7 +14,11 @@ final class PreparedShaderSource {
 			int fixedHeight,
 			int updateRate,
 			@NonNull PreparedShaderInput fragmentShader,
-			@NonNull List<DiscoveredSampler> samplers) {
+			@NonNull List<DiscoveredSampler> samplers,
+			boolean isCompute,
+			@NonNull int[] threads,
+			@Nullable String sizeImage,
+			int repeat) {
 	}
 
 	private final float fTimeMax;
@@ -39,6 +43,14 @@ final class PreparedShaderSource {
 	// raw files in ~/.shader).
 	@NonNull
 	private final List<ExternalTextureSpec> externalTextures;
+
+	// Storage images for compute kernels (#define IMAGE_...).
+	@NonNull
+	private List<ComputeImageSpec> computeImages = List.of();
+
+	// Set when the source can't be prepared (e.g. compute without GLES3).
+	@NonNull
+	private List<ShaderError> errors = List.of();
 
 	private PreparedShaderSource(
 			float fTimeMax,
@@ -135,6 +147,25 @@ final class PreparedShaderSource {
 	@NonNull
 	List<ExternalTextureSpec> getExternalTextures() {
 		return externalTextures;
+	}
+
+	@NonNull
+	List<ComputeImageSpec> getComputeImages() {
+		return computeImages;
+	}
+
+	@NonNull
+	List<ShaderError> getErrors() {
+		return errors;
+	}
+
+	@NonNull
+	PreparedShaderSource withCompute(
+			@NonNull List<ComputeImageSpec> computeImages,
+			@NonNull List<ShaderError> errors) {
+		this.computeImages = List.copyOf(computeImages);
+		this.errors = List.copyOf(errors);
+		return this;
 	}
 
 	@NonNull

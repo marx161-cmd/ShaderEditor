@@ -19,6 +19,7 @@ final class ShaderRenderPipeline {
 	private static final int THUMBNAIL_WIDTH = 144;
 	private static final int THUMBNAIL_HEIGHT = 144;
 	private static final String SURFACE_FRAME = "frame";
+	static final String UNIFORM_PASS = "pass";
 	private static final TextureParameters BUFFER_TEXTURE_PARAMETERS =
 			new TextureParameters(
 					GLES20.GL_LINEAR,
@@ -42,6 +43,11 @@ final class ShaderRenderPipeline {
 	private final GlFramebuffer[] framebuffers = new GlFramebuffer[2];
 	private final GlTexture2D[] targetTextures = new GlTexture2D[2];
 	private final Map<String, BufferSet> bufferSets = new LinkedHashMap<>();
+	// Compute storage images, in declaration order (= image unit order).
+	private final Map<String, ImageSet> imageSets = new LinkedHashMap<>();
+	private boolean multipassTargetsReady;
+	private int multipassFrame;
+	private final float[] imageResolution3 = new float[3];
 	private int frontTarget;
 	private int backTarget = 1;
 	@Nullable
@@ -79,6 +85,8 @@ final class ShaderRenderPipeline {
 		thumbnailFramebuffer = null;
 		thumbnailTexture = null;
 		bufferSets.clear();
+		imageSets.clear();
+		multipassTargetsReady = false;
 		discardTargets();
 	}
 
@@ -115,8 +123,10 @@ final class ShaderRenderPipeline {
 		return errors;
 	}
 
+	// A flag, not !bufferSets.isEmpty(): a shader may have no buffers at all
+	// (only compute sections + image).
 	boolean hasMultipassTargets() {
-		return !bufferSets.isEmpty();
+		return multipassTargetsReady;
 	}
 
 	void releaseMultipassTargets() {
@@ -129,11 +139,19 @@ final class ShaderRenderPipeline {
 			}
 		}
 		bufferSets.clear();
+		for (ImageSet set : imageSets.values()) {
+			device.deleteTexture(set.textures[0]);
+			device.deleteTexture(set.textures[1]);
+		}
+		imageSets.clear();
+		multipassTargetsReady = false;
+		multipassFrame = 0;
 	}
 
 	@NonNull
 	List<ShaderError> ensureMultipassTargets(
 			@NonNull List<RendererProgramManager.PassProgram> passes,
+			@NonNull List<ComputeImageSpec> images,
 			int surfaceWidth,
 			int surfaceHeight,
 			float quality,
@@ -145,8 +163,32 @@ final class ShaderRenderPipeline {
 		}
 
 		releaseMultipassTargets();
+		for (ComputeImageSpec spec : images) {
+			int width = spec.full()
+					? Math.max(1, Math.round(surfaceWidth * quality))
+					: spec.width();
+			int height = spec.full()
+					? Math.max(1, Math.round(surfaceHeight * quality))
+					: spec.height();
+			ImageSet set = new ImageSet(spec);
+			set.textures[0] = device.createImage(spec.format(), width, height,
+					spec.depth());
+			if (spec.swap()) {
+				set.textures[1] = device.createImage(spec.format(), width,
+						height, spec.depth());
+			}
+			imageSets.put(spec.name(), set);
+		}
+		if (!imageSets.isEmpty()) {
+			int error = device.getGlError();
+			if (error != GLES20.GL_NO_ERROR) {
+				errors.add(ShaderError.createGeneral(
+						"Allocating compute images failed: GL error 0x" +
+								Integer.toHexString(error)));
+			}
+		}
 		for (RendererProgramManager.PassProgram pass : passes) {
-			if (pass.isImage()) {
+			if (pass.isImage() || pass.isCompute()) {
 				continue;
 			}
 			// Buffer resolution = surface × quality × per-buffer scale, unless
@@ -170,6 +212,7 @@ final class ShaderRenderPipeline {
 			bufferSets.put(pass.name(), set);
 		}
 		device.bindFramebuffer(null);
+		multipassTargetsReady = true;
 		return errors;
 	}
 
@@ -181,6 +224,13 @@ final class ShaderRenderPipeline {
 		for (int i = 0; i < passes.size(); ++i) {
 			RendererProgramManager.PassProgram pass = passes.get(i);
 			ProgramBindings passBindings = bindings.get(i);
+
+			if (pass.isCompute()) {
+				if (multipassFrame % pass.updateRate() == 0) {
+					dispatch(pass, passBindings, surfaceWidth, surfaceHeight);
+				}
+				continue;
+			}
 
 			BufferSet set = null;
 			int width;
@@ -207,6 +257,7 @@ final class ShaderRenderPipeline {
 					drawResolution);
 			bindBufferSamplers(passBindings, pass.program(), pass.name());
 			bindBufferResolutions(passBindings);
+			bindImageSamplers(passBindings, pass.program());
 			device.applyBindings(passBindings);
 			device.draw(fullScreenQuadMesh, pass.program());
 
@@ -214,6 +265,92 @@ final class ShaderRenderPipeline {
 				int target = set.front;
 				set.front = set.back;
 				set.back = target;
+			}
+		}
+		++multipassFrame;
+	}
+
+	private void dispatch(
+			@NonNull RendererProgramManager.PassProgram pass,
+			@NonNull ProgramBindings passBindings,
+			int surfaceWidth,
+			int surfaceHeight) {
+		int threadsX;
+		int threadsY;
+		int threadsZ;
+		if (pass.sizeImage() != null) {
+			ImageSet sizing = imageSets.get(pass.sizeImage());
+			if (sizing == null) {
+				return;
+			}
+			threadsX = sizing.textures[0].getWidth();
+			threadsY = sizing.textures[0].getHeight();
+			threadsZ = sizing.textures[0].getDepth();
+		} else {
+			threadsX = pass.threads()[0];
+			threadsY = pass.threads()[1];
+			threadsZ = pass.threads()[2];
+		}
+		int[] local = pass.program().getWorkGroupSize();
+		int groupsX = (threadsX + local[0] - 1) / Math.max(1, local[0]);
+		int groupsY = (threadsY + local[1] - 1) / Math.max(1, local[1]);
+		int groupsZ = (threadsZ + local[2] - 1) / Math.max(1, local[2]);
+
+		drawResolution[0] = surfaceWidth;
+		drawResolution[1] = surfaceHeight;
+		passBindings.setFloat2(ShaderRenderer.UNIFORM_RESOLUTION, drawResolution);
+		bindBufferSamplers(passBindings, pass.program(), null);
+		bindBufferResolutions(passBindings);
+		for (int p = 0; p < pass.repeat(); ++p) {
+			passBindings.setInt(UNIFORM_PASS, p);
+			bindImageSamplers(passBindings, pass.program());
+			device.applyBindings(passBindings);
+			bindImageUnits();
+			device.dispatchCompute(groupsX, groupsY, groupsZ);
+			swapWrittenImages(pass.program());
+		}
+	}
+
+	// Units follow declaration order: name, then name_out for swap images,
+	// matching the <name>_UNIT macros from ShaderSourcePreparer.
+	private void bindImageUnits() {
+		int unit = 0;
+		for (ImageSet set : imageSets.values()) {
+			device.bindImage(unit++, set.textures[set.front]);
+			if (set.spec.swap()) {
+				device.bindImage(unit++, set.textures[1 - set.front]);
+			}
+		}
+	}
+
+	private void swapWrittenImages(@NonNull GlProgram program) {
+		for (ImageSet set : imageSets.values()) {
+			if (set.spec.swap() && device.getUniformType(program,
+					set.spec.name() + ComputeImageSpec.OUT_SUFFIX) != 0) {
+				set.front = 1 - set.front;
+			}
+		}
+	}
+
+	// Any pass can read an image as a texture by its name (the current
+	// read copy), and gets <name>Res (vec2, or vec3 for 3D images).
+	private void bindImageSamplers(
+			@NonNull ProgramBindings bindings,
+			@NonNull GlProgram program) {
+		for (ImageSet set : imageSets.values()) {
+			GlImageTexture texture = set.textures[set.front];
+			String name = set.spec.name();
+			if (GlDevice.isSamplerType(device.getUniformType(program, name))) {
+				bindings.setTexture(name, texture);
+			}
+			if (texture.is3D()) {
+				imageResolution3[0] = texture.getWidth();
+				imageResolution3[1] = texture.getHeight();
+				imageResolution3[2] = texture.getDepth();
+				bindings.setFloat3(name + "Res", imageResolution3.clone());
+			} else {
+				bindings.setFloat2(name + "Res", new float[]{
+						texture.getWidth(), texture.getHeight()});
 			}
 		}
 	}
@@ -300,6 +437,7 @@ final class ShaderRenderPipeline {
 					drawResolution);
 			bindBufferSamplers(passBindings, pass.program(), pass.name());
 			bindBufferResolutions(passBindings);
+			bindImageSamplers(passBindings, pass.program());
 			device.applyBindings(passBindings);
 			device.clear(GLES20.GL_COLOR_BUFFER_BIT);
 			device.draw(fullScreenQuadMesh, pass.program());
@@ -484,6 +622,17 @@ final class ShaderRenderPipeline {
 			device.bindFramebuffer(framebuffer);
 			device.clear(GLES20.GL_COLOR_BUFFER_BIT |
 					GLES20.GL_DEPTH_BUFFER_BIT);
+		}
+	}
+
+	private static final class ImageSet {
+		@NonNull
+		final ComputeImageSpec spec;
+		final GlImageTexture[] textures = new GlImageTexture[2];
+		int front = 0;
+
+		ImageSet(@NonNull ComputeImageSpec spec) {
+			this.spec = spec;
 		}
 	}
 

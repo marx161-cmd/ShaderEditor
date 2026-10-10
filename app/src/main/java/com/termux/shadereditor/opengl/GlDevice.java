@@ -4,15 +4,19 @@ import android.graphics.Bitmap;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
+import android.opengl.GLES31;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.microedition.khronos.opengles.GL11ExtensionPack;
 
@@ -501,6 +505,175 @@ final class GlDevice {
 		}
 
 		return GlProgramBuildResult.success(new GlProgram(programId));
+	}
+
+	// GLES 3.1+ compute program from a single compute shader.
+	@NonNull
+	GlProgramBuildResult createComputeProgram(
+			@NonNull String source,
+			@NonNull ShaderLineMapping lineMapping) {
+		if (!supportsCompute()) {
+			return GlProgramBuildResult.failure(List.of(ShaderError.createGeneral(
+					"compute sections need OpenGL ES 3.1+, this context is " +
+							GLES20.glGetString(GLES20.GL_VERSION))));
+		}
+		ShaderCompileResult compile = compileShader(
+				GLES31.GL_COMPUTE_SHADER,
+				source,
+				lineMapping);
+		if (compile.shader == null) {
+			return GlProgramBuildResult.failure(compile.infoLog);
+		}
+		int programId = GLES20.glCreateProgram();
+		if (programId == 0) {
+			deleteShader(compile.shader);
+			return GlProgramBuildResult.failure(
+					List.of(ShaderError.createGeneral("Cannot create program")));
+		}
+		GLES20.glAttachShader(programId, compile.shader.getId());
+		GLES20.glLinkProgram(programId);
+		deleteShader(compile.shader);
+
+		int[] linkStatus = new int[1];
+		GLES20.glGetProgramiv(programId, GLES20.GL_LINK_STATUS, linkStatus, 0);
+		if (linkStatus[0] != GLES20.GL_TRUE) {
+			List<ShaderError> infoLog = ShaderError.parseAll(
+					GLES20.glGetProgramInfoLog(programId),
+					lineMapping);
+			GLES20.glDeleteProgram(programId);
+			return GlProgramBuildResult.failure(infoLog);
+		}
+		int[] size = new int[3];
+		GLES20.glGetProgramiv(programId, GLES31.GL_COMPUTE_WORK_GROUP_SIZE,
+				size, 0);
+		GlProgram program = new GlProgram(programId);
+		program.setCompute(size);
+		return GlProgramBuildResult.success(program);
+	}
+
+	boolean supportsCompute() {
+		int[] major = new int[1];
+		int[] minor = new int[1];
+		GLES30.glGetIntegerv(GLES30.GL_MAJOR_VERSION, major, 0);
+		GLES30.glGetIntegerv(GLES30.GL_MINOR_VERSION, minor, 0);
+		return major[0] > 3 || (major[0] == 3 && minor[0] >= 1);
+	}
+
+	int getMaxImageUnits() {
+		int[] value = new int[1];
+		GLES20.glGetIntegerv(GLES31.GL_MAX_IMAGE_UNITS, value, 0);
+		return value[0];
+	}
+
+	// GL type of an active uniform (GL_SAMPLER_2D, GL_IMAGE_2D, ...),
+	// 0 if the program doesn't use it.
+	int getUniformType(@NonNull GlProgram program, @NonNull String name) {
+		Map<String, Integer> types = program.getUniformTypes();
+		if (types == null) {
+			types = new HashMap<>();
+			int[] count = new int[1];
+			GLES20.glGetProgramiv(program.getId(), GLES20.GL_ACTIVE_UNIFORMS,
+					count, 0);
+			int[] size = new int[1];
+			int[] type = new int[1];
+			for (int i = 0; i < count[0]; ++i) {
+				String uniformName = GLES20.glGetActiveUniform(
+						program.getId(), i, size, 0, type, 0);
+				if (uniformName == null) {
+					continue;
+				}
+				int bracket = uniformName.indexOf('[');
+				types.put(bracket > 0
+						? uniformName.substring(0, bracket)
+						: uniformName, type[0]);
+			}
+			program.setUniformTypes(types);
+		}
+		Integer type = types.get(name);
+		return type != null ? type : 0;
+	}
+
+	static boolean isSamplerType(int type) {
+		return switch (type) {
+			case GLES20.GL_SAMPLER_2D,
+					GLES30.GL_SAMPLER_3D,
+					GLES30.GL_INT_SAMPLER_2D,
+					GLES30.GL_INT_SAMPLER_3D,
+					GLES30.GL_UNSIGNED_INT_SAMPLER_2D,
+					GLES30.GL_UNSIGNED_INT_SAMPLER_3D -> true;
+			default -> false;
+		};
+	}
+
+	// Immutable storage (required for image load/store), cleared to zero.
+	@NonNull
+	GlImageTexture createImage(
+			@NonNull ComputeImageSpec.Format format,
+			int width,
+			int height,
+			int depth) {
+		int[] ids = new int[1];
+		GLES20.glGenTextures(1, ids, 0);
+		GlImageTexture texture = new GlImageTexture(ids[0], width, height,
+				depth, format);
+		int target = texture.getTarget();
+		bindTexture(0, texture);
+		if (texture.is3D()) {
+			GLES30.glTexStorage3D(target, 1, format.internalFormat,
+					width, height, depth);
+		} else {
+			GLES30.glTexStorage2D(target, 1, format.internalFormat,
+					width, height);
+		}
+		int filter = format.filterable ? GLES20.GL_LINEAR : GLES20.GL_NEAREST;
+		GLES20.glTexParameteri(target, GLES20.GL_TEXTURE_MIN_FILTER, filter);
+		GLES20.glTexParameteri(target, GLES20.GL_TEXTURE_MAG_FILTER, filter);
+		GLES20.glTexParameteri(target, GLES20.GL_TEXTURE_WRAP_S,
+				GLES20.GL_CLAMP_TO_EDGE);
+		GLES20.glTexParameteri(target, GLES20.GL_TEXTURE_WRAP_T,
+				GLES20.GL_CLAMP_TO_EDGE);
+		if (texture.is3D()) {
+			GLES20.glTexParameteri(target, GLES30.GL_TEXTURE_WRAP_R,
+					GLES20.GL_CLAMP_TO_EDGE);
+		}
+		// GLES has no glClearTexImage: upload zeros, one slice at a time.
+		ByteBuffer zeros = ByteBuffer.allocateDirect(
+				width * height * format.bytesPerTexel)
+				.order(ByteOrder.nativeOrder());
+		GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1);
+		if (texture.is3D()) {
+			for (int z = 0; z < depth; ++z) {
+				zeros.position(0);
+				GLES30.glTexSubImage3D(target, 0, 0, 0, z, width, height, 1,
+						format.format, format.type, zeros);
+			}
+		} else {
+			GLES20.glTexSubImage2D(target, 0, 0, 0, width, height,
+					format.format, format.type, zeros);
+		}
+		GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4);
+		return texture;
+	}
+
+	void bindImage(int unit, @NonNull GlImageTexture texture) {
+		GLES31.glBindImageTexture(
+				unit,
+				texture.getId(),
+				0,
+				texture.is3D(),
+				0,
+				GLES31.GL_READ_WRITE,
+				texture.getFormat().internalFormat);
+	}
+
+	void dispatchCompute(int groupsX, int groupsY, int groupsZ) {
+		GLES31.glDispatchCompute(groupsX, groupsY, groupsZ);
+		// Every later section (compute or fragment) sees the writes.
+		GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS);
+	}
+
+	int getGlError() {
+		return getLastGlError();
 	}
 
 	void deleteProgram(@Nullable GlProgram program) {

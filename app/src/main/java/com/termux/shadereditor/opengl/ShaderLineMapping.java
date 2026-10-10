@@ -67,6 +67,14 @@ final class ShaderLineMapping {
 		return Math.max(mapped, -1);
 	}
 
+	int insertedLineCount() {
+		int lines = 0;
+		for (InsertedLines insertion : insertions) {
+			lines += insertion.lineCount;
+		}
+		return lines;
+	}
+
 	@NonNull
 	ShaderLineMapping addInsertedLinesAfterSourceLine(int sourceLine, int lineCount) {
 		if (lineCount <= 0) {
