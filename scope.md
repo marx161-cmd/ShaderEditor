@@ -345,3 +345,37 @@ that skipped all samples in between -- a noisy snapshot, not a continuous energy
 but degraded (onset timing +-40 ms, low bands barely settle within one block). Options put to the user: track on the
 12 Hz feed anyway / fix the meter at the source in JDSP (filters on every sample, energy accumulated between ticks,
 higher publish rate -- a native change that ships via the vendor .so / OTA chain) / something else.
+
+## 2026-10-10 — no desktop compatibility; phone compute stage is phone-native (user)
+
+Checked live: the Pixel GPU is OpenGL ES 3.2 (PowerVR DXT-48-1536, ro.opengles.version 196610), and this fork already
+gets an ES3 context (widget/ShaderView.java ContextFactory), so GLES 3.1 compute is available. The phone shaders were
+designed fragment-only because we assumed it wasn't.
+Decided (user): drop desktop<->phone format compatibility as a goal. tools/se_to_mp.py (shader-backdrop) stays in the
+repo but is no longer maintained and no longer limits the design; the few shaders a year that matter get ported by
+hand. So a future compute stage here gets its own GLES-native syntax and does NOT need to mirror the desktop's .mp /
+sim.comp format. Known requirement when it's built: images written by compute need immutable storage
+(glTexStorage2D). opengl/GlDevice.java allocates everything with glTexImage2D today, which glBindImageTexture
+rejects. Compute stage design not started -- agree it before building.
+
+## 2026-10-10 — shaders live as .glsl files in Termux home, not in shaders.db (user)
+
+Problem (user): shaders sit inside shaders.db (8.6 MB, ~200 rows, most recent saves unnamed), so they can't be
+edited easily from Termux/SSH.
+Decided (user):
+- Source of truth = `/data/data/com.termux/files/home/shaders/<name>.glsl` (Termux `~/shaders/`), one file per
+  shader, filename = shader name. Same UID 1000 + system_app_data_file label as the existing `~/.shader/` texture
+  bridge, so no permission work.
+- NO live file watching -- the existing "update wallpaper" button re-reads the file.
+- Migrate ALL rows once, unnamed ones included (`shader_<id>.glsl`), file mtime = the row's modified time.
+Design (mine, flagged):
+- Only the storage under `database/dao/ShaderDao.java` changes; its public API keeps numeric ids, so the ~20 callers
+  (editor, list, wallpaper service, prefs) stay as they are. An id -> filename index plus per-shader quality lives in
+  the app's own files dir (not in ~/shaders). Thumbnails are cached there too, keyed by id. Migration keeps the DB
+  ids, so the wallpaper/last-opened prefs survive.
+- New .glsl files dropped into ~/shaders show up on the next list refresh. Renaming in the app renames the file (id
+  kept). Renaming in Termux = new id (the wallpaper pref then falls back like a deleted shader would).
+- Delete in the app moves the file to `~/shaders/.trash/`; it's never hard-deleted.
+- The shaders table in shaders.db is left in place, read only by the one-time migration. Textures stay in the DB.
+- The unused `project/FolderShaderProjectSource` multi-file scaffolding (pre-07-25 checkpoint) is NOT used for
+  this; one flat file per shader.
