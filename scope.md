@@ -504,3 +504,11 @@ Three steps, one at a time:
    JDSP bands + the beat clock (no drum/tonal split on the phone -> density/voice from band groups; close, not
    identical).
 3. The desktop go signal (entries above), as "start this song's timeline at T".
+
+## 2026-10-11 — step 2 (music-state layer) BUILT, user-confirmed
+
+v103 (de572b0): beat/MusicState.java, u_ms_* bound in BuiltinSystemUniforms (any u_ms_* uniform also acquires
+the beat clock). User checked ms_test.glsl on screen: "looks on beat". Log confirmed the cached path on a song
+playing on comrade, seen through Cybersyn's mirrored media session ("+analysis", ms src=1, next_in counting down,
+section changes counted). So desktop songs already reach the phone's cached timeline via the mirrored session;
+step 3 (go signal) only matters if that position proves too coarse.
