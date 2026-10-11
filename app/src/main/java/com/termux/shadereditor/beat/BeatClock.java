@@ -152,6 +152,12 @@ public final class BeatClock {
 		return state;
 	}
 
+	/** The u_ms_* music-state values (MusicState.java). */
+	@NonNull
+	public MusicState.Snapshot music() {
+		return music.snapshot();
+	}
+
 	/** A touch-down at {@code nanos} (System.nanoTime base); any thread. */
 	public static void tap(long nanos) {
 		BeatClock c = instance;
@@ -194,6 +200,8 @@ public final class BeatClock {
 		Set<String> names = new HashSet<>();
 		double[] beats;
 		double medianIv;
+		@Nullable
+		MusicState.Song ms; // the analysis (beatmaps.json version 2), null for a plain map
 	}
 
 	private List<Track> maps;
@@ -203,6 +211,8 @@ public final class BeatClock {
 	private MappedByteBuffer bands;
 	private long lastSeq = -1;
 	private final double[] row = new double[BANDS_N];
+	private final double[] linRow = new double[BANDS_N];
+	private final MusicState music = new MusicState();
 	private final double[] silentRow = new double[BANDS_N];
 
 	private String sessionKey;
@@ -249,6 +259,7 @@ public final class BeatClock {
 					// through a stalled stream.
 					steer(now);
 					tracker.update(silentRow, now / 1e9, now / 1e9);
+					music.update(null, 0.0, now / 1e9, now, tracker.count(), tracker.conf(), heardPosition());
 					lastFrameNanos = now - 83_000_000L; // ~one frame per loop at 60 Hz
 					publish(now);
 				}
@@ -289,19 +300,22 @@ public final class BeatClock {
 			lastSeq = Math.max(0, seq - 1); // start, engine restart, or we fell behind
 		}
 		int fed = 0;
+		frameRms = bands.getFloat(HDR_OFF + 28);
+		double pos = heardPosition();
 		for (long k = lastSeq; k < seq; k++) {
 			int off = RING_OFF + (int) (k % ringLen) * BANDS_N * 4;
 			for (int b = 0; b < BANDS_N; b++) {
 				double lin = Math.max(bands.getFloat(off + b * 4), 1e-9f);
+				linRow[b] = lin;
 				double db = 20.0 * Math.log10(lin);
 				row[b] = BeatTracker.clamp((db - DB_FLOOR) / -DB_FLOOR, 0.0, 1.0);
 			}
 			steer(now);
 			tracker.update(row, k / (double) hz, now / 1e9);
+			music.update(linRow, frameRms, k / (double) hz, now, tracker.count(), tracker.conf(), pos);
 			fed++;
 		}
 		lastSeq = seq;
-		frameRms = bands.getFloat(HDR_OFF + 28);
 		if (fed > 0) {
 			lastFrameNanos = now;
 			publish(now);
@@ -352,6 +366,15 @@ public final class BeatClock {
 			return;
 		}
 		tracker.setReference(got[1], got[2]);
+	}
+
+	/** Position in the matched song as heard (offset applied), NaN when none plays. */
+	private double heardPosition() {
+		if (matched == null || playback == null ||
+				playback.getState() != PlaybackState.STATE_PLAYING) {
+			return Double.NaN;
+		}
+		return songPosition() - offsetS;
 	}
 
 	private double songPosition() {
@@ -532,6 +555,7 @@ public final class BeatClock {
 				sessionKey = null;
 				matched = null;
 				matchedLabel = "";
+				music.setSong(null);
 			}
 			return;
 		}
@@ -546,12 +570,14 @@ public final class BeatClock {
 		}
 		sessionKey = key;
 		matched = match(artist, title, durMs / 1000.0);
+		music.setSong(matched != null ? matched.ms : null);
 		clearTap("song changed");
 		matchedLabel = playing.getPackageName() + " '" + artist + " - " + title + "' " +
 				(matched != null
 						? String.format(Locale.US, "-> map %.1f BPM (%s - %s)",
 								matched.bpm, matched.artist, matched.title)
-						: "-> no map, live");
+						: "-> no map, live") +
+				(matched != null && matched.ms != null ? " +analysis" : "");
 		Log.i(TAG, matchedLabel);
 	}
 
@@ -635,6 +661,7 @@ public final class BeatClock {
 				}
 				java.util.Arrays.sort(iv);
 				t.medianIv = iv[iv.length / 2];
+				t.ms = MusicState.Song.parse(o, t.beats);
 				t.names.add(norm(t.title));
 				t.names.add(norm(t.artist + t.title));
 				JSONArray keys = o.optJSONArray("keys");
@@ -720,7 +747,10 @@ public final class BeatClock {
 		lastLog = now;
 		State s = state;
 		double pos = playback != null ? songPosition() : -1;
-		log.printf(Locale.US, "%.3f\t%d\t%.2f\t%.3f\t%.3f\t%.3f\t%s\t%s%n",
-				now / 1e9, s.source, s.bpm, s.conf, s.count, pos, matchedLabel, tapLabel);
+		MusicState.Snapshot m = music.snapshot();
+		log.printf(Locale.US, "%.3f\t%d\t%.2f\t%.3f\t%.3f\t%.3f\t%s\t%s\tms src=%.0f chg=%.0f cur=%.2f,%.2f,%.2f,%.2f sec=%.2f,%.2f,%.2f,%.2f next_in=%.1f drop_in=%.1f%n",
+				now / 1e9, s.source, s.bpm, s.conf, s.count, pos, matchedLabel, tapLabel,
+				m.source, m.change, m.curA[0], m.curA[1], m.curA[2], m.curA[3],
+				m.secA[0], m.secA[1], m.secA[2], m.secA[3], m.nextIn, m.dropIn);
 	}
 }

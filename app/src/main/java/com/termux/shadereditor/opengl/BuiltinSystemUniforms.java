@@ -1,6 +1,7 @@
 package com.termux.shadereditor.opengl;
 
 import com.termux.shadereditor.beat.BeatClock;
+import com.termux.shadereditor.beat.MusicState;
 
 import android.app.Activity;
 import android.content.Context;
@@ -123,6 +124,12 @@ final class BuiltinSystemUniforms {
 	private static final long BANDS_UPDATE_INTERVAL = 33333333L; // ~30Hz (ns)
 	// Shared beat clock, held only while a shader uses a beat uniform.
 	private boolean hasBeat;
+	// u_ms_* (beat/MusicState.java, same names + meanings as shader-backdrop music_state.py)
+	private static final String[] MUSIC_UNIFORMS = {"u_ms_source", "u_ms_cur_a", "u_ms_cur_b",
+			"u_ms_sec_a", "u_ms_sec_b", "u_ms_next_a", "u_ms_next_b", "u_ms_change",
+			"u_ms_change_age", "u_ms_next_in", "u_ms_drop_in", "u_ms_bar_phase",
+			"u_ms_repeat", "u_ms_song_pos"};
+	private boolean hasMusic;
 	// Written from the UI thread (release on pause) and the GL thread
 	// (configure/apply), so volatile; apply() re-acquires after a pause,
 	// because a resume that keeps the GL surface never re-runs configure().
@@ -200,6 +207,12 @@ final class BuiltinSystemUniforms {
 				ShaderRenderer.UNIFORM_BEAT_SOURCE}) {
 			hasBeat |= anyHasUniform(device, programs, name);
 		}
+		// music-state layer (beat/MusicState.java): needs the clock too
+		hasMusic = false;
+		for (String name : MUSIC_UNIFORMS) {
+			hasMusic |= anyHasUniform(device, programs, name);
+		}
+		hasBeat |= hasMusic;
 		if (hasBeat && beatClock == null) {
 			beatClock = BeatClock.acquire(context);
 		} else if (!hasBeat && beatClock != null) {
@@ -250,6 +263,23 @@ final class BuiltinSystemUniforms {
 			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_CONF, (float) beat.conf);
 			bindings.setFloat(ShaderRenderer.UNIFORM_BEAT_BPM, (float) beat.bpm);
 			bindings.setInt(ShaderRenderer.UNIFORM_BEAT_SOURCE, beat.source);
+			if (hasMusic) {
+				MusicState.Snapshot m = clock.music();
+				bindings.setFloat("u_ms_source", m.source);
+				bindings.setFloat4("u_ms_cur_a", m.curA);
+				bindings.setFloat4("u_ms_cur_b", m.curB);
+				bindings.setFloat4("u_ms_sec_a", m.secA);
+				bindings.setFloat4("u_ms_sec_b", m.secB);
+				bindings.setFloat4("u_ms_next_a", m.nextA);
+				bindings.setFloat4("u_ms_next_b", m.nextB);
+				bindings.setFloat("u_ms_change", m.change);
+				bindings.setFloat("u_ms_change_age", m.changeAge(now));
+				bindings.setFloat("u_ms_next_in", m.nextIn);
+				bindings.setFloat("u_ms_drop_in", m.dropIn);
+				bindings.setFloat("u_ms_bar_phase", m.barPhase);
+				bindings.setFloat("u_ms_repeat", m.repeat);
+				bindings.setFloat("u_ms_song_pos", m.songPos);
+			}
 		}
 		if (hasNightMode) {
 			bindings.setInt(ShaderRenderer.UNIFORM_NIGHT_MODE, nightMode);
