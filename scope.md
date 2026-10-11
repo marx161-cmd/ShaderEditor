@@ -526,3 +526,12 @@ shader-go-from-comrade.) ShaderEditor v104: BeatClock reads the file on its 500 
 (file: keys URL-decoded on both sides), and NEVER matches Cybersyn's mirror session (com.termux.cybersyn).
 Priority: local media session (matched) > desktop go (beatSource 4) > tap > live; MusicState follows the same
 song. beat_offset_ms.txt still trims on top.
+
+## 2026-10-11 — BACKDROPS (v105, user)
+
+- User: a dedicated backdrop folder in the Termux ShaderEditor folder; any shader may declare one of its images by
+  file name. Built: `~/shaders/backdrops/` (created by the app), `#define BACKDROP_<name> <file>` + `uniform
+  sampler2D <name>;` (+ `<name>Res` = size), via the external-texture bridge (BitmapFactory decode, RGBA8, halved
+  until <= 4096, re-upload on mtime, rows top-to-bottom like the .bin bridge, no file = black). Docs in
+  SHADEREDITOR_CONTEXT.md. First user: shader-backdrop's mobile/ember_flock_v3.glsl (`BACKDROP_bg
+  ember_flock.png`, cover-fit, 60 % brightness, a 2.5 % parallax sway with the view's turn).

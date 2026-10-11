@@ -1,5 +1,7 @@
 package com.termux.shadereditor.opengl;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -34,6 +36,10 @@ final class ExternalTextureBridge {
 	private static final String WATCH_DIR =
 			"/data/data/com.termux/files/home/.shader";
 	private static final String FILE_EXTENSION = ".bin";
+	// BACKDROPS (v105): image files any shader may declare by name, #define BACKDROP_<name> <file>
+	private static final String BACKDROP_DIR =
+			"/data/data/com.termux/files/home/shaders/backdrops";
+	private static final int BACKDROP_MAX_SIZE = 4096;
 
 	private GlDevice device;
 	private final Map<String, Slot> slots = new HashMap<>();
@@ -46,6 +52,7 @@ final class ExternalTextureBridge {
 		@NonNull
 		final GlTexture2D texture;
 		long lastModified = -1L;
+		final float[] size = new float[]{0f, 0f};
 
 		Slot(@NonNull ExternalTextureSpec spec,
 				@NonNull File file,
@@ -64,6 +71,7 @@ final class ExternalTextureBridge {
 		this.device = device;
 		// Best-effort; the producer/user usually creates it first.
 		new File(WATCH_DIR).mkdirs();
+		new File(BACKDROP_DIR).mkdirs();
 
 		for (ExternalTextureSpec spec : specs) {
 			if (slots.size() >= MAX_EXTERNAL_TEXTURES) {
@@ -75,7 +83,9 @@ final class ExternalTextureBridge {
 			if (spec.format().requiresEs3 && !gles3) {
 				continue;
 			}
-			File file = new File(WATCH_DIR, spec.name() + FILE_EXTENSION);
+			File file = spec.file() != null
+					? new File(BACKDROP_DIR, spec.file())
+					: new File(WATCH_DIR, spec.name() + FILE_EXTENSION);
 			slots.put(
 					spec.name(),
 					new Slot(spec, file, device.createTexture2D()));
@@ -93,6 +103,9 @@ final class ExternalTextureBridge {
 				slot.lastModified = modified;
 			}
 			bindings.setTexture(slot.spec.name(), slot.texture);
+			if (slot.spec.file() != null) {
+				bindings.setFloat2(slot.spec.name() + "Res", slot.size);
+			}
 		}
 	}
 
@@ -111,6 +124,9 @@ final class ExternalTextureBridge {
 	// lifetime of the process.
 	private boolean upload(@NonNull Slot slot) {
 		ExternalTextureSpec spec = slot.spec;
+		if (spec.format() == ExternalTextureSpec.Format.BITMAP) {
+			return uploadBitmap(slot);
+		}
 		int expected = spec.width() * spec.height() * spec.format().bytesPerPixel;
 		byte[] bytes = new byte[expected];
 		try (FileInputStream in = new FileInputStream(slot.file)) {
@@ -140,6 +156,7 @@ final class ExternalTextureBridge {
 		}
 
 		ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder());
+		// (BITMAP never gets here)
 		switch (spec.format()) {
 			case RGBA8 -> device.uploadRgba8Texture2D(
 					slot.texture, buffer, spec.width(), spec.height());
@@ -153,6 +170,50 @@ final class ExternalTextureBridge {
 						slot.texture, data, spec.width(), spec.height());
 			}
 		}
+		return true;
+	}
+
+	// A backdrop image: decoded at its own size (halved until it fits BACKDROP_MAX_SIZE), RGBA8.
+	private boolean uploadBitmap(@NonNull Slot slot) {
+		Bitmap bmp;
+		try {
+			BitmapFactory.Options bounds = new BitmapFactory.Options();
+			bounds.inJustDecodeBounds = true;
+			BitmapFactory.decodeFile(slot.file.getPath(), bounds);
+			if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+				Log.w(TAG, "backdrop '" + slot.spec.name() + "': cannot read " + slot.file.getPath());
+				return false;
+			}
+			BitmapFactory.Options opts = new BitmapFactory.Options();
+			opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+			opts.inScaled = false;
+			opts.inPremultiplied = false;
+			int sample = 1;
+			while (bounds.outWidth / sample > BACKDROP_MAX_SIZE || bounds.outHeight / sample > BACKDROP_MAX_SIZE) {
+				sample *= 2;
+			}
+			opts.inSampleSize = sample;
+			bmp = BitmapFactory.decodeFile(slot.file.getPath(), opts);
+		} catch (OutOfMemoryError | SecurityException e) {
+			Log.w(TAG, "backdrop '" + slot.spec.name() + "': decode failed", e);
+			return false;
+		}
+		if (bmp == null) {
+			return false;
+		}
+		if (bmp.getConfig() != Bitmap.Config.ARGB_8888) {
+			Bitmap c = bmp.copy(Bitmap.Config.ARGB_8888, false);
+			bmp.recycle();
+			bmp = c;
+		}
+		int w = bmp.getWidth(), h = bmp.getHeight();
+		ByteBuffer buffer = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder());
+		bmp.copyPixelsToBuffer(buffer);   // ARGB_8888 is laid out R, G, B, A in memory
+		bmp.recycle();
+		buffer.rewind();
+		device.uploadRgba8Texture2D(slot.texture, buffer, w, h);
+		slot.size[0] = w;
+		slot.size[1] = h;
 		return true;
 	}
 }

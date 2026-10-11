@@ -47,6 +47,8 @@ Feedback: `uniform sampler2D backbuffer;` (single-pass only, previous frame).
 
 ## Textures
 
+- **Backdrops (v105)**: drop images (PNG/JPEG/WebP) into `~/shaders/backdrops/` (Termux home); any shader declares one by file name: `#define BACKDROP_<name> <file>` + `uniform sampler2D <name>;` (optional `uniform vec2 <name>Res;` = its size in px, 0 when missing). Decoded at its own size (halved until <= 4096), RGBA8, rows top-to-bottom (sample with `vec2(u, 1.0 - v)`); re-uploaded when the file changes; no file = black. Counts toward the 12 external texture slots. File names: letters, digits, `_ . -` (no spaces).
+
 - **DB user textures**: `uniform sampler2D <name>;` → user-uploaded bitmap via the picker.
 - **External texture bridge** (live, file-backed): declare `#define EXT_TEXTURE_<name> <fmt> <w> <h>` + `uniform sampler2D <name>;` → auto-binds raw `<name>.bin` from `~/.shader` (`/data/data/com.termux/files/home/.shader/`). `<fmt>` ∈ `rgba8` | `rgba16f` | `r32f`. File = exactly w×h×bytes, top-to-bottom rows (sample with `v = 1.0 - gl_FragCoord.y/resolution.y`). mtime-driven, ≤12 slots. Precedence: external < DB texture < camera/buffer.
 - **`bands`**: `uniform sampler2D bands;` = JDSP 108-band audio spectrum (R32F, one semitone/texel, band 0 = A0 ≈27.5 Hz). `texture2D(bands, vec2((i+0.5)/108.0, 0.5)).r`, or `texelFetch(bands, ivec2(i,0), 0).r` in ES3.

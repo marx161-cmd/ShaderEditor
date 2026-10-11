@@ -40,6 +40,10 @@ final class ShaderSourcePreparer {
 					"(r32f|rgba8|rgba16f)[ \\t]+" +
 					"([0-9]+)[ \\t]+([0-9]+)[ \\t]*$",
 			Pattern.MULTILINE);
+	private static final Pattern PATTERN_BACKDROP = Pattern.compile(
+			"^#define[ \\t]+BACKDROP_([A-Za-z_][A-Za-z0-9_]*)[ \\t]+" +
+					"\"?([A-Za-z0-9_.\\-]+)\"?[ \\t]*$",
+			Pattern.MULTILINE);
 	private static final Pattern PATTERN_IMAGE = Pattern.compile(
 			"^#define[ \\t]+IMAGE_([A-Za-z_][A-Za-z0-9_]*)[ \\t]+" +
 					"([a-z0-9]+)[ \\t]+" +
@@ -376,7 +380,22 @@ final class ShaderSourcePreparer {
 					matcher.group(1),
 					format,
 					width,
-					height));
+					height,
+					null));
+		}
+		Matcher backdrop = PATTERN_BACKDROP.matcher(source);
+		while (backdrop.find() &&
+				specs.size() < ExternalTextureBridge.MAX_EXTERNAL_TEXTURES) {
+			String file = backdrop.group(2);
+			if (file.contains("..")) {
+				continue;
+			}
+			specs.add(new ExternalTextureSpec(
+					backdrop.group(1),
+					ExternalTextureSpec.Format.BITMAP,
+					0,
+					0,
+					file));
 		}
 		return specs;
 	}
