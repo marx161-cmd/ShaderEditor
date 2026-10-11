@@ -57,6 +57,14 @@ public final class BeatClock {
 	private static final File MAPS = new File(HOME, ".shader/beatmaps.json");
 	private static final File OFFSET = new File(HOME, ".shader/beat_offset_ms.txt");
 	private static final File LOG = new File(HOME, ".shader/beat_clock.log");
+	// Desktop go signal (scope.md 2026-10-10/11): comrade's ~/bin/shader-go-signal writes
+	// it straight into Termux home over its persistent SSH shell (the one it measures the
+	// clock offset on). "go <heard_start_phone_ms> <duration_s> <key>" or "stop <ms>";
+	// the start already includes the speaker delay and the clock offset.
+	private static final File GO = new File(HOME, ".shader/shader_go.txt");
+	// Cybersyn's mirror of comrade's player has no usable position: never match it --
+	// the go signal carries the song instead.
+	private static final String MIRROR_PKG = "com.termux.cybersyn";
 
 	private static final int BANDS_N = 108;
 	private static final int HDR_OFF = BANDS_N * 4;
@@ -76,6 +84,7 @@ public final class BeatClock {
 	public static final int SOURCE_LIVE = 1;
 	public static final int SOURCE_MAP = 2;
 	public static final int SOURCE_TAP = 3;
+	public static final int SOURCE_DESKTOP = 4;
 
 	// Tap tempo (scope.md 2026-10-10): 8 taps whose intervals all sit within
 	// TAP_TOL of their median set tempo + phase (two bars of 4/4). Held until a
@@ -198,6 +207,7 @@ public final class BeatClock {
 		double confidence = Double.NaN;
 		boolean exactKey; // a file: key matched (no duration check, like yt:/file: on desktop)
 		Set<String> names = new HashSet<>();
+		Set<String> keys = new HashSet<>(); // exact desktop keys (file: ones URL-decoded)
 		double[] beats;
 		double medianIv;
 		@Nullable
@@ -215,6 +225,11 @@ public final class BeatClock {
 	private final MusicState music = new MusicState();
 	private final double[] silentRow = new double[BANDS_N];
 
+	private long goModified;
+	private Track goTrack;
+	private long goStartMs;
+	private double goDurS;
+	private String goLabel = "";
 	private String sessionKey;
 	private Track matched;
 	private String matchedLabel = "";
@@ -339,7 +354,8 @@ public final class BeatClock {
 	}
 
 	private void publish(long now) {
-		int source = matched != null ? SOURCE_MAP
+		int source = localPlaying() ? SOURCE_MAP
+				: desktopActive() ? SOURCE_DESKTOP
 				: tapActive ? SOURCE_TAP
 				: tracker.conf() > BeatTracker.CONF_GATE ? SOURCE_LIVE
 				: SOURCE_NONE;
@@ -349,8 +365,8 @@ public final class BeatClock {
 
 	/** beat_session.py _update: steer from the map while one is matched, else from taps. */
 	private void steer(long now) {
-		if (matched == null || playback == null ||
-				playback.getState() != PlaybackState.STATE_PLAYING) {
+		Track song = localPlaying() ? matched : desktopActive() ? goTrack : null;
+		if (song == null) {
 			if (tapActive) {
 				double beats = (now - tapT0) / tapPeriodNs;
 				tracker.setReference(BeatTracker.mod(beats, 1.0), tapPeriodNs / 1e9);
@@ -359,8 +375,8 @@ public final class BeatClock {
 			}
 			return;
 		}
-		double t = songPosition() - offsetS;
-		double[] got = mapLookup(matched.beats, t, matched.medianIv);
+		double t = heardPosition();
+		double[] got = mapLookup(song.beats, t, song.medianIv);
 		if (got == null) {
 			tracker.clearReference();
 			return;
@@ -368,13 +384,30 @@ public final class BeatClock {
 		tracker.setReference(got[1], got[2]);
 	}
 
-	/** Position in the matched song as heard (offset applied), NaN when none plays. */
-	private double heardPosition() {
-		if (matched == null || playback == null ||
-				playback.getState() != PlaybackState.STATE_PLAYING) {
-			return Double.NaN;
+	/** A cached song plays in a local media session (beats the desktop). */
+	private boolean localPlaying() {
+		return matched != null && playback != null &&
+				playback.getState() == PlaybackState.STATE_PLAYING;
+	}
+
+	/** The desktop's song (go signal) is playing as heard now. */
+	private boolean desktopActive() {
+		if (goTrack == null) {
+			return false;
 		}
-		return songPosition() - offsetS;
+		long now = System.currentTimeMillis();
+		return now >= goStartMs - 5_000L && now <= goStartMs + (long) (goDurS * 1000.0) + 2_000L;
+	}
+
+	/** Position in the active cached song as heard (offset applied), NaN when none. */
+	private double heardPosition() {
+		if (localPlaying()) {
+			return songPosition() - offsetS;
+		}
+		if (desktopActive()) {
+			return (System.currentTimeMillis() - goStartMs) / 1000.0 - offsetS;
+		}
+		return Double.NaN;
 	}
 
 	private double songPosition() {
@@ -534,12 +567,88 @@ public final class BeatClock {
 	private void pollSession() {
 		loadMapsIfChanged();
 		offsetS = readOffsetS();
+		readGo();
+		try {
+			pollMediaSession();
+		} finally {
+			Track song = localPlaying() ? matched : desktopActive() ? goTrack : null;
+			music.setSong(song != null ? song.ms : null);
+		}
+	}
+
+	private void readGo() {
+		if (!GO.exists() || GO.lastModified() == goModified) {
+			return;
+		}
+		goModified = GO.lastModified();
+		String line;
+		try (BufferedReader r = new BufferedReader(new FileReader(GO))) {
+			line = r.readLine();
+		} catch (IOException e) {
+			return;
+		}
+		if (line == null) {
+			return;
+		}
+		String[] f = line.trim().split(" ", 4);
+		if (f[0].equals("go") && f.length == 4) {
+			try {
+				goStartMs = Long.parseLong(f[1]);
+				goDurS = Double.parseDouble(f[2]);
+			} catch (NumberFormatException e) {
+				return;
+			}
+			goTrack = findByKey(f[3]);
+			if (goTrack != null && goDurS <= 0) {
+				goDurS = goTrack.beats[goTrack.beats.length - 1];
+			}
+			clearTap("desktop song");
+			goLabel = "desktop '" + f[3] + "' " + (goTrack != null
+					? String.format(Locale.US, "-> analysis %.1f BPM", goTrack.bpm)
+					: "-> not analysed");
+		} else if (f[0].equals("stop")) {
+			goTrack = null;
+			goLabel = "desktop stopped";
+		}
+		Log.i(TAG, goLabel);
+	}
+
+	@Nullable
+	private Track findByKey(String key) {
+		if (maps == null) {
+			return null;
+		}
+		String k = normKey(key);
+		for (Track t : maps) {
+			if (t.keys.contains(k)) {
+				return t;
+			}
+		}
+		return null;
+	}
+
+	@NonNull
+	private static String normKey(String key) {
+		if (!key.startsWith("file:")) {
+			return key;
+		}
+		try {
+			return "file:" + URLDecoder.decode(key.substring(5).replace("+", "%2B"), "UTF-8");
+		} catch (Exception e) {
+			return key;
+		}
+	}
+
+	private void pollMediaSession() {
 		MediaController playing = null;
 		try {
 			MediaSessionManager msm = context.getSystemService(MediaSessionManager.class);
 			List<MediaController> sessions = msm.getActiveSessions(
 					new ComponentName(context, NotificationService.class));
 			for (MediaController c : sessions) {
+				if (MIRROR_PKG.equals(c.getPackageName())) {
+					continue;
+				}
 				PlaybackState s = c.getPlaybackState();
 				if (s != null && s.getState() == PlaybackState.STATE_PLAYING) {
 					playing = c;
@@ -555,7 +664,6 @@ public final class BeatClock {
 				sessionKey = null;
 				matched = null;
 				matchedLabel = "";
-				music.setSong(null);
 			}
 			return;
 		}
@@ -570,7 +678,6 @@ public final class BeatClock {
 		}
 		sessionKey = key;
 		matched = match(artist, title, durMs / 1000.0);
-		music.setSong(matched != null ? matched.ms : null);
 		clearTap("song changed");
 		matchedLabel = playing.getPackageName() + " '" + artist + " - " + title + "' " +
 				(matched != null
@@ -668,6 +775,7 @@ public final class BeatClock {
 				if (keys != null) {
 					for (int k = 0; k < keys.length(); k++) {
 						String key = keys.getString(k);
+						t.keys.add(normKey(key));
 						if (key.startsWith("file:")) {
 							String base = fileBase(key);
 							t.names.add(norm(base));
@@ -746,10 +854,11 @@ public final class BeatClock {
 		}
 		lastLog = now;
 		State s = state;
-		double pos = playback != null ? songPosition() : -1;
+		double pos = heardPosition();
 		MusicState.Snapshot m = music.snapshot();
 		log.printf(Locale.US, "%.3f\t%d\t%.2f\t%.3f\t%.3f\t%.3f\t%s\t%s\tms src=%.0f chg=%.0f cur=%.2f,%.2f,%.2f,%.2f sec=%.2f,%.2f,%.2f,%.2f next_in=%.1f drop_in=%.1f%n",
-				now / 1e9, s.source, s.bpm, s.conf, s.count, pos, matchedLabel, tapLabel,
+				now / 1e9, s.source, s.bpm, s.conf, s.count, pos,
+				desktopActive() && !localPlaying() ? goLabel : matchedLabel, tapLabel,
 				m.source, m.change, m.curA[0], m.curA[1], m.curA[2], m.curA[3],
 				m.secA[0], m.secA[1], m.secA[2], m.secA[3], m.nextIn, m.dropIn);
 	}

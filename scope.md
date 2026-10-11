@@ -512,3 +512,17 @@ the beat clock). User checked ms_test.glsl on screen: "looks on beat". Log confi
 playing on comrade, seen through Cybersyn's mirrored media session ("+analysis", ms src=1, next_in counting down,
 section changes counted). So desktop songs already reach the phone's cached timeline via the mirrored session;
 step 3 (go signal) only matters if that position proves too coarse.
+
+## 2026-10-11 — step 3: desktop go signal BUILT (transport changed: through Termux, not MQTT/Cybersyn)
+
+User: the Cybersyn mirror session reports no usable position, so the go signal is needed, with the latency in.
+Changed (user: "we can do shared memory through termux into shader editor"): comrade's ~/bin/shader-go-signal
+(shader-go-signal.service) keeps ONE persistent SSH shell to Termux -- it measures the phone clock offset on it
+(best of 9 round trips, every 5 min; measured -300..-318 ms, rtt 20-40 ms) and writes ~/.shader/shader_go.txt on it
+(atomic rename): "go <heard_start_phone_ms> <duration_s> <key>" / "stop <ms>". heard_start = nowplaying's anchored
+song zero + VIDEO_DELAY_MS (oppo-av-sync.env, 922 ms) + clock offset. (An MQTT -> Cybersyn file.write route was
+built first and works -- Cybersyn only subscribes cybersyn/+/event -- but is DISABLED: profile
+shader-go-from-comrade.) ShaderEditor v104: BeatClock reads the file on its 500 ms poll, matches the exact key
+(file: keys URL-decoded on both sides), and NEVER matches Cybersyn's mirror session (com.termux.cybersyn).
+Priority: local media session (matched) > desktop go (beatSource 4) > tap > live; MusicState follows the same
+song. beat_offset_ms.txt still trims on top.
