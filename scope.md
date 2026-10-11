@@ -486,3 +486,21 @@ the user chose to redo the cache (real audio via yt-dlp + offline analysis, rich
 decided above (MQTT -> Cybersyn file.write -> clock thread, phone-clock start time, priority phone session > desktop
 > tap > live) is unchanged; it becomes "start this song's feature timeline at T" and is built in that project's
 step 4.
+
+## 2026-10-11 — shared baseline: the phone gets the desktop song analysis + the music-state layer (user)
+
+Found: the phone's ~/.shader/beatmaps.json (exported 10-10 19:16) still holds 807 of the OLD browser-learned
+maps, almost all warped (shader-backdrop scope.md 2026-10-10). Decided (user): DROP the old maps everywhere on the
+phone -- songs without an analysis run live (and get recomputed from real audio later); no fallback to old maps.
+Three steps, one at a time:
+1. EXPORT (beatmaps-sync-pixel rewritten): only songs analysed by shader-backdrop analysis/analyze.py (the
+   song_features index). Same file + same per-track fields BeatClock already reads (artist, title, duration_s, keys,
+   bpm, coverage, confidence, beats) so the beat clock keeps working unchanged, PLUS what the music-state layer
+   needs: beats_per_bar, downbeats, sections (start_s, start_beat, 8 scores, repeat id), drops, builds, and the six
+   rel_* curves per beat (u8, base64). version 2. Artist/title: the linked track (yt: key) or else the file's
+   artist folder + file name. Keys: the track's keys + file:<path> of the analysed audio.
+2. MusicState.java in ShaderEditor: a port of shader-backdrop music_state.py with the SAME u_ms_* uniform names
+   and meanings (so movement code copies between phone and desktop unchanged). Cached path 1:1; live path from the
+   JDSP bands + the beat clock (no drum/tonal split on the phone -> density/voice from band groups; close, not
+   identical).
+3. The desktop go signal (entries above), as "start this song's timeline at T".
