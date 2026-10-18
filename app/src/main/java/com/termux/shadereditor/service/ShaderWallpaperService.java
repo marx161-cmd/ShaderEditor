@@ -11,6 +11,7 @@ import android.view.SurfaceHolder;
 import androidx.annotation.Nullable;
 
 import com.termux.shadereditor.app.ShaderEditorApp;
+import com.termux.shadereditor.beat.BeatClock;
 import com.termux.shadereditor.database.DataRecords;
 import com.termux.shadereditor.database.DataSource;
 import com.termux.shadereditor.database.Database;
@@ -92,6 +93,9 @@ public class ShaderWallpaperService extends WallpaperService {
 		@Override
 		public void onVisibilityChanged(boolean visible) {
 			super.onVisibilityChanged(visible);
+			if (!visible) {
+				BeatClock.tapOff();   // screen off / app switch: the tap tempo is off (scope.md 2026-10-19)
+			}
 			if (view == null) {
 				return;
 			}

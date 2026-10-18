@@ -535,3 +535,18 @@ song. beat_offset_ms.txt still trims on top.
   until <= 4096, re-upload on mtime, rows top-to-bottom like the .bin bridge, no file = black). Docs in
   SHADEREDITOR_CONTEXT.md. First user: shader-backdrop's mobile/ember_flock_v3.glsl (`BACKDROP_bg
   ember_flock.png`, cover-fit, 60 % brightness, a 2.5 % parallax sway with the view's turn).
+
+## 2026-10-19 — tap tempo: a DELIBERATE on/off gesture replaces the 8-tap auto-detect (user)
+
+Why (user): "I want it more deliberate ... that way I know when it's on." Every finger landing used to feed the
+8-tap detector (the glass gestures of emberbox included), and it cleared itself on silence / song change.
+Decided (user, 2026-10-19):
+- ON = one finger HOLDS, a second finger TAPS 4 times (the 4 taps set tempo + phase). Repeating the gesture while
+  on re-taps the tempo. A tap only counts if the second finger lifts again quickly (a pinch / held second finger is
+  not a tap); a third finger voids the gesture. Evaluated when the holding finger lifts.
+- OFF = hold + ONE tap with the second finger.
+- It keeps running until turned off -- no silence / song-change auto-clear any more. Screen off / app switch
+  (wallpaper hidden) also turns it off (user: the shader resets anyway, so "it's off").
+- Priority UNCHANGED (user: "like we got it rn, it works great"): cached map > desktop > tap > live tracker.
+  The map / desktop still win while active; the tap tempo is no longer cleared by them, it resumes after.
+- Lawnchair opens its own menu on a one-finger long-press (~0.4 s): the second finger should land before that.

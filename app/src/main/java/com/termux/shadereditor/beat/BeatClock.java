@@ -8,6 +8,7 @@ import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.MotionEvent;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -86,17 +87,16 @@ public final class BeatClock {
 	public static final int SOURCE_TAP = 3;
 	public static final int SOURCE_DESKTOP = 4;
 
-	// Tap tempo (scope.md 2026-10-10): 8 taps whose intervals all sit within
-	// TAP_TOL of their median set tempo + phase (two bars of 4/4). Held until a
-	// cached song takes over, the song changes, or the audio goes properly
-	// silent for SILENCE_S (the gap between songs).
-	private static final int TAP_MIN = 8;
-	private static final int TAP_MAX = 16;
-	private static final double TAP_TOL = 0.10;
-	private static final long TAP_GAP_NS = 2_500_000_000L;
-	private static final double SILENCE_S = 1.5;
-	private static final double SILENCE_DB = 24.0;  // below the running music level
-	private static final double HEARD_DB = 12.0;    // within this of it = music is playing
+	// Tap tempo (scope.md 2026-10-10, gesture 2026-10-19): a DELIBERATE gesture.
+	// ON = one finger holds, a second finger taps TAP_MIN+ times (intervals within
+	// TAP_TOL of their median -> least-squares tempo + phase); OFF = hold + one tap.
+	// A tap = the second finger down and up again within TAP_UP_MAX_NS; a third
+	// finger voids the gesture; it is judged when the holding finger lifts. Runs
+	// until switched off or the wallpaper is hidden (screen off / app switch).
+	private static final int TAP_MIN = 4;
+	private static final double TAP_TOL = 0.15;
+	private static final long TAP_UP_MAX_NS = 350_000_000L;
+	private static final int EV_OFF = -1;
 
 	/** Immutable snapshot for the render thread. */
 	public static final class State {
@@ -167,11 +167,20 @@ public final class BeatClock {
 		return music.snapshot();
 	}
 
-	/** A touch-down at {@code nanos} (System.nanoTime base); any thread. */
-	public static void tap(long nanos) {
+	/** A touch event (masked action, pointer count incl. the acting one, the acting
+	 * pointer's id, System.nanoTime base) for the tap-tempo gesture; any thread. */
+	public static void touch(int action, int pointers, int pointerId, long nanos) {
 		BeatClock c = instance;
 		if (c != null && c.running) {
-			c.tapQueue.add(nanos);
+			c.tapQueue.add(new long[]{action, pointers, pointerId, nanos});
+		}
+	}
+
+	/** The wallpaper went hidden (screen off / app switch): tap tempo off; any thread. */
+	public static void tapOff() {
+		BeatClock c = instance;
+		if (c != null && c.running) {
+			c.tapQueue.add(new long[]{EV_OFF, 0, 0, 0});
 		}
 	}
 
@@ -240,16 +249,15 @@ public final class BeatClock {
 	private long lastLog;
 	private long lastFrameNanos;
 
-	private final java.util.concurrent.ConcurrentLinkedQueue<Long> tapQueue =
+	private final java.util.concurrent.ConcurrentLinkedQueue<long[]> tapQueue =
 			new java.util.concurrent.ConcurrentLinkedQueue<>();
 	private final java.util.ArrayList<Long> taps = new java.util.ArrayList<>();
 	private boolean tapActive;
 	private long tapT0;
 	private double tapPeriodNs;
-	private boolean tapHeard;
-	private long silentSince;
-	private double musicPeakDb = -120.0;
-	private long lastLevelNanos;
+	private boolean gestureLive;
+	private int anchorId;
+	private long tapperDownAt;
 	private float frameRms;
 	private volatile float micAmp;
 	private volatile long micNanos;
@@ -267,7 +275,6 @@ public final class BeatClock {
 				}
 				processTaps(now);
 				int fed = feedFrames(now);
-				watchSilence(now);
 				if (fed == 0 && now - lastFrameNanos > 100_000_000L) {
 					// Nothing playing through JDSP: flywheel at the last tempo
 					// (a silent frame = zero onset), like the desktop does
@@ -450,67 +457,110 @@ public final class BeatClock {
 	// --- tap tempo ---
 
 	private void processTaps(long now) {
-		Long t;
-		boolean added = false;
-		while ((t = tapQueue.poll()) != null) {
-			if (!taps.isEmpty() && t - taps.get(taps.size() - 1) > TAP_GAP_NS) {
-				taps.clear();
+		long[] ev;
+		while ((ev = tapQueue.poll()) != null) {
+			int action = (int) ev[0];
+			int pointers = (int) ev[1];
+			int id = (int) ev[2];
+			long t = ev[3];
+			switch (action) {
+				case EV_OFF:
+					gestureLive = false;
+					clearTap("wallpaper hidden");
+					break;
+				case MotionEvent.ACTION_DOWN:              // the holding finger
+					gestureLive = true;
+					anchorId = id;
+					tapperDownAt = 0;
+					taps.clear();
+					break;
+				case MotionEvent.ACTION_POINTER_DOWN:
+					if (!gestureLive) {
+						break;
+					}
+					if (pointers == 2) {
+						tapperDownAt = t;
+					} else {
+						gestureLive = false;
+						Log.i(TAG, "tap gesture voided: " + pointers + " fingers");
+					}
+					break;
+				case MotionEvent.ACTION_POINTER_UP:
+					if (!gestureLive) {
+						break;
+					}
+					if (id == anchorId) {                 // the holding finger lifted first
+						endGesture();
+						break;
+					}
+					if (tapperDownAt != 0 && t - tapperDownAt <= TAP_UP_MAX_NS) {
+						taps.add(tapperDownAt);
+					}
+					tapperDownAt = 0;
+					break;
+				case MotionEvent.ACTION_UP:
+					if (gestureLive) {
+						endGesture();
+					}
+					break;
+				case MotionEvent.ACTION_CANCEL:
+					gestureLive = false;
+					break;
+				default:
+					break;
 			}
-			taps.add(t);
-			if (taps.size() > TAP_MAX) {
-				taps.remove(0);
-			}
-			added = true;
 		}
-		if (!added || taps.size() < TAP_MIN) {
+	}
+
+	/** The holding finger lifted: 1 tap = off, TAP_MIN+ even taps = on (re-tap while on). */
+	private void endGesture() {
+		gestureLive = false;
+		int n = taps.size();
+		if (n == 1) {
+			clearTap("off gesture");
 			return;
 		}
-		// The longest run of trailing taps (>= TAP_MIN) whose intervals all fit.
-		int n = taps.size();
-		int use = 0;
-		for (int k = n; k >= TAP_MIN; k--) {
-			double[] iv = new double[k - 1];
-			for (int i = 0; i < k - 1; i++) {
-				iv[i] = taps.get(n - k + i + 1) - taps.get(n - k + i);
+		if (n < TAP_MIN) {
+			if (n > 0) {
+				Log.i(TAG, "tap gesture ignored: " + n + " taps");
 			}
-			double[] sorted = iv.clone();
-			java.util.Arrays.sort(sorted);
-			double med = sorted[sorted.length / 2];
-			boolean ok = med > 0;
-			for (double v : iv) {
-				ok &= Math.abs(v - med) <= TAP_TOL * med;
-			}
-			if (ok) {
-				use = k;
-				break;
-			}
+			return;
 		}
-		if (use == 0) {
+		double[] iv = new double[n - 1];
+		for (int i = 0; i < n - 1; i++) {
+			iv[i] = taps.get(i + 1) - taps.get(i);
+		}
+		double[] sorted = iv.clone();
+		java.util.Arrays.sort(sorted);
+		double med = sorted[sorted.length / 2];
+		boolean ok = med > 0;
+		for (double v : iv) {
+			ok &= Math.abs(v - med) <= TAP_TOL * med;
+		}
+		if (!ok) {
+			Log.i(TAG, "tap gesture ignored: uneven taps");
 			return;
 		}
 		// Least-squares grid through the taps: time = t0 + i * period.
 		double sx = 0, sy = 0, sxx = 0, sxy = 0;
-		long base = taps.get(n - use);
-		for (int i = 0; i < use; i++) {
-			double y = taps.get(n - use + i) - base;
+		long base = taps.get(0);
+		for (int i = 0; i < n; i++) {
+			double y = taps.get(i) - base;
 			sx += i;
 			sy += y;
 			sxx += (double) i * i;
 			sxy += i * y;
 		}
-		double period = (use * sxy - sx * sy) / (use * sxx - sx * sx);
+		double period = (n * sxy - sx * sy) / (n * sxx - sx * sx);
 		double bpm = 60e9 / period;
 		if (bpm < BeatTracker.BPM_MIN || bpm > BeatTracker.BPM_MAX) {
+			Log.i(TAG, String.format(Locale.US, "tap gesture ignored: %.1f BPM out of range", bpm));
 			return;
 		}
 		tapPeriodNs = period;
-		tapT0 = base + (long) ((sy - period * sx) / use);
-		if (!tapActive) {
-			tapHeard = false;
-			silentSince = 0;
-		}
+		tapT0 = base + (long) ((sy - period * sx) / n);
 		tapActive = true;
-		tapLabel = String.format(Locale.US, "tap %.1f BPM (%d taps)", bpm, use);
+		tapLabel = String.format(Locale.US, "tap %.1f BPM (%d taps)", bpm, n);
 		Log.i(TAG, tapLabel);
 	}
 
@@ -521,45 +571,6 @@ public final class BeatClock {
 		}
 		tapActive = false;
 		taps.clear();
-	}
-
-	// "Clear reset" (user): the audio going properly silent for SILENCE_S --
-	// relative to the running music level, so a quiet break doesn't count.
-	// Level = JDSP's frame rms while frames flow, else the mic while a shader
-	// has it open; frames that STOP after flowing count as silence too.
-	private void watchSilence(long now) {
-		if (!tapActive) {
-			musicPeakDb = -120.0;
-			return;
-		}
-		double level;
-		boolean framesLive = now - lastFrameNanos < 200_000_000L && lastSeq > 0;
-		boolean micLive = now - micNanos < 500_000_000L;
-		if (framesLive) {
-			level = 20.0 * Math.log10(Math.max(frameRms, 1e-7f));
-		} else if (micLive) {
-			level = 20.0 * Math.log10(Math.max(micAmp, 1e-7f));
-		} else if (tapHeard) {
-			level = -140.0; // the stream we were hearing stopped
-		} else {
-			return;
-		}
-		double dt = lastLevelNanos == 0 ? 0 : Math.min((now - lastLevelNanos) / 1e9, 0.1);
-		lastLevelNanos = now;
-		musicPeakDb = Math.max(level, musicPeakDb - 0.5 * dt);
-		if (level > musicPeakDb - HEARD_DB) {
-			tapHeard = true;
-		}
-		if (tapHeard && level < musicPeakDb - SILENCE_DB) {
-			if (silentSince == 0) {
-				silentSince = now;
-			} else if ((now - silentSince) / 1e9 >= SILENCE_S) {
-				clearTap("silence");
-				silentSince = 0;
-			}
-		} else {
-			silentSince = 0;
-		}
 	}
 
 	// --- media session + cache ---
@@ -602,7 +613,6 @@ public final class BeatClock {
 			if (goTrack != null && goDurS <= 0) {
 				goDurS = goTrack.beats[goTrack.beats.length - 1];
 			}
-			clearTap("desktop song");
 			goLabel = "desktop '" + f[3] + "' " + (goTrack != null
 					? String.format(Locale.US, "-> analysis %.1f BPM", goTrack.bpm)
 					: "-> not analysed");
@@ -678,7 +688,6 @@ public final class BeatClock {
 		}
 		sessionKey = key;
 		matched = match(artist, title, durMs / 1000.0);
-		clearTap("song changed");
 		matchedLabel = playing.getPackageName() + " '" + artist + " - " + title + "' " +
 				(matched != null
 						? String.format(Locale.US, "-> map %.1f BPM (%s - %s)",

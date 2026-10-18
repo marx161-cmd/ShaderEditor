@@ -148,13 +148,15 @@ final class BuiltinUniforms {
 		mouse[0] = x / w;
 		mouse[1] = 1 - y / h;
 
+		// Tap-tempo gesture (BeatClock): the touch's own time, moved onto System.nanoTime.
+		BeatClock.touch(e.getActionMasked(), e.getPointerCount(),
+				e.getPointerId(e.getActionIndex()),
+				System.nanoTime() - (SystemClock.uptimeMillis() - e.getEventTime()) * 1_000_000L);
+
 		switch (e.getActionMasked()) {
 			case MotionEvent.ACTION_DOWN:
 				touchStart[0] = touch[0];
 				touchStart[1] = touch[1];
-				// Tap tempo: the touch's own time, moved onto System.nanoTime.
-				BeatClock.tap(System.nanoTime() - (SystemClock.uptimeMillis() -
-						e.getEventTime()) * 1_000_000L);
 				break;
 			case MotionEvent.ACTION_UP:
 			case MotionEvent.ACTION_CANCEL:
