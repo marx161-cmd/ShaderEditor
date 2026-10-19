@@ -44,6 +44,8 @@ final class ExternalTextureBridge {
 	private GlDevice device;
 	private final Map<String, Slot> slots = new HashMap<>();
 
+	private static final long CHECK_NS = 250_000_000L;   // file mtime polling per slot (see apply)
+
 	private static final class Slot {
 		@NonNull
 		final ExternalTextureSpec spec;
@@ -52,6 +54,7 @@ final class ExternalTextureBridge {
 		@NonNull
 		final GlTexture2D texture;
 		long lastModified = -1L;
+		long lastCheckNs = Long.MIN_VALUE / 2;
 		final float[] size = new float[]{0f, 0f};
 
 		Slot(@NonNull ExternalTextureSpec spec,
@@ -94,13 +97,18 @@ final class ExternalTextureBridge {
 
 	void apply(@NonNull ProgramBindings bindings, long now) {
 		for (Slot slot : slots.values()) {
-			long modified = slot.file.lastModified();
-			// Only record the mtime once the data is actually in the texture.
-			// Recording it unconditionally meant a single failed read retired
-			// the slot permanently.
-			if (modified != 0L && modified != slot.lastModified
-					&& upload(slot)) {
-				slot.lastModified = modified;
+			// The file check is at most every CHECK_NS per slot (2026-10-19 simpleperf: stat()-ing every slot for EVERY
+			// program every frame -- 17 programs in emberbox at 120 Hz -- was ~18 % of the GL thread's CPU).
+			if (now - slot.lastCheckNs >= CHECK_NS) {
+				slot.lastCheckNs = now;
+				long modified = slot.file.lastModified();
+				// Only record the mtime once the data is actually in the texture.
+				// Recording it unconditionally meant a single failed read retired
+				// the slot permanently.
+				if (modified != 0L && modified != slot.lastModified
+						&& upload(slot)) {
+					slot.lastModified = modified;
+				}
 			}
 			bindings.setTexture(slot.spec.name(), slot.texture);
 			if (slot.spec.file() != null) {
