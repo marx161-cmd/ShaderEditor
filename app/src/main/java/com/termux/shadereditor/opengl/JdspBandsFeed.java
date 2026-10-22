@@ -43,7 +43,7 @@ import java.nio.file.StandardOpenOption;
  * engine (whose filter design these delays belong to); a v2 engine's
  * single-biquad bank is read unshifted.
  */
-final class JdspBandsFeed {
+public final class JdspBandsFeed {
 	static final int N = 108;
 	static final int FEATURES = 11;
 	static final int HIST = 32;
@@ -66,7 +66,7 @@ final class JdspBandsFeed {
 	// Per-band group delay of the v3 engine's filter bank in seconds, from
 	// shader-backdrop band_filters.delays_s() (orders {2,2,2,3,3,4,4,4,4},
 	// 48 kHz); row = octave, A0 first. Converted to frames with frameHz.
-	private static final float[] DELAY_S = {
+	public static final float[] DELAY_S = {
 			0.2834f, 0.2675f, 0.2524f, 0.2383f, 0.2249f, 0.2123f, 0.2004f, 0.1891f, 0.1785f, 0.1685f, 0.1590f, 0.1501f,
 			0.1417f, 0.1337f, 0.1262f, 0.1191f, 0.1124f, 0.1061f, 0.1002f, 0.0946f, 0.0893f, 0.0842f, 0.0795f, 0.0751f,
 			0.0708f, 0.0669f, 0.0631f, 0.0596f, 0.0562f, 0.0531f, 0.0501f, 0.0473f, 0.0446f, 0.0421f, 0.0398f, 0.0375f,
@@ -80,6 +80,16 @@ final class JdspBandsFeed {
 	private static final double ENV_ATTACK_MS = 60.0;    // engine BAND_ENV_ATTACK_MS
 	private static final double ENV_RELEASE_MS = 70.0;   // engine BAND_ENV_RELEASE_MS
 	private static final int LOCAL_HIST = 64;            // frames kept here (>= HIST + max delay)
+
+	/** Per-band shift in frames at `hz` for a v3 engine; all zero for older engines. */
+	public static int[] delayFrames(int version, float hz, int cap) {
+		int[] d = new int[N];
+		for (int b = 0; b < N; b++) {
+			d[b] = version >= 3 ? Math.min(cap, Math.round(DELAY_S[b] * hz)) : 0;
+		}
+		return d;
+	}
+	public static final int MAX_DELAY_FRAMES_60HZ = 17;
 
 	final float[] raw = new float[N];                    // aligned latest raw frame
 	final float[] cooked = new float[N];                 // aligned cooked frame
@@ -137,10 +147,7 @@ final class JdspBandsFeed {
 			delayHz = hz;
 			attackCoef = Math.exp(-1.0 / (hz * ENV_ATTACK_MS / 1000.0));
 			releaseCoef = Math.exp(-1.0 / (hz * ENV_RELEASE_MS / 1000.0));
-			for (int b = 0; b < N; b++) {
-				delayFrames[b] = version >= 3
-						? Math.min(LOCAL_HIST - HIST, Math.round(DELAY_S[b] * hz)) : 0;
-			}
+			System.arraycopy(delayFrames(version, hz, LOCAL_HIST - HIST), 0, delayFrames, 0, N);
 		}
 		if (lastSeq < 0 || seq < lastSeq || seq - lastSeq > ringLen - 2) {
 			// start, engine restart, or we fell behind the ring: resync on the

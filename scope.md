@@ -586,3 +586,15 @@ row of `bands_hist`; DELAY_S = band_filters.delays_s() for the v3 engine's Butte
 engine's norm_db + 60/70 ms envelope constants (the engine's own cooked frame stays in the file
 for other consumers). v2 engines are read unshifted. Features stay the engine's unaligned
 values, as the desktop's are.
+
+## 2026-10-22 ~13:55 — v110: the beat tracker reads the aligned rows too (consistency fix for v109)
+
+Found while checking emberbox / worms v8: both shaders gate their kick on the beat clock's phase
+(KICK_GATE 0.15 of a beat, ±75 ms at 120 BPM) and detect it on bands 4..27, which v109 now reads
+67..217 ms later than before (their group delay). The live tracker (BeatClock) still consumed the
+raw ring unaligned, so its grid and the shaders' kicks would have drifted apart by that much and
+the gate would have dropped kicks. Desktop structure is the same: beat_session/beat_track run on
+delay-aligned rows (beat_track.py:176). BeatClock now reads band b of frame k from frame
+k - delay_b (JdspBandsFeed.delayFrames, v3 engines only), resyncs when it falls behind by more
+than ringLen - 2 - maxDelay frames. Map / tap / desktop sources are absolute and unaffected; the
+global output-latency offset stays the offset file's job.

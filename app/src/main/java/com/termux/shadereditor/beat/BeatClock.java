@@ -26,6 +26,8 @@ import java.io.PrintWriter;
 import java.net.URLDecoder;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
+
+import com.termux.shadereditor.opengl.JdspBandsFeed;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
@@ -70,6 +72,7 @@ public final class BeatClock {
 	private static final int BANDS_N = 108;
 	private static final int HDR_OFF = BANDS_N * 4;
 	private static final int SEQ_OFF = HDR_OFF + 8;
+	private static final int VER_OFF = HDR_OFF + 4;
 	private static final int RING_LEN_OFF = HDR_OFF + 12;
 	private static final int HZ_OFF = HDR_OFF + 20;
 	private static final int RING_OFF = HDR_OFF + 32;
@@ -228,6 +231,10 @@ public final class BeatClock {
 
 	private final BeatTracker tracker = new BeatTracker();
 	private MappedByteBuffer bands;
+	private int[] delay = new int[BANDS_N];
+	private int maxDelay;
+	private int alignedVersion = -1;
+	private float alignedHz;
 	private long lastSeq = -1;
 	private final double[] row = new double[BANDS_N];
 	private final double[] linRow = new double[BANDS_N];
@@ -318,16 +325,32 @@ public final class BeatClock {
 		if (ringLen <= 0 || hz <= 0f) {
 			return 0;
 		}
-		if (lastSeq < 0 || seq < lastSeq || seq - lastSeq > ringLen - 2) {
+		// v110: the tracker sees the same per-band group-delay-aligned rows as
+		// the shaders' band textures (JdspBandsFeed / desktop comp_rows), so a
+		// kick the wallpaper detects and the grid the tracker produces agree.
+		// Band b of frame k is read from frame k - delay_b, which must still be
+		// in the ring: resync earlier when we fall behind by that much.
+		int version = bands.getInt(VER_OFF);
+		if (alignedVersion != version || alignedHz != hz) {
+			alignedVersion = version;
+			alignedHz = hz;
+			delay = JdspBandsFeed.delayFrames(version, hz, ringLen - 4);
+			maxDelay = 0;
+			for (int d : delay) {
+				maxDelay = Math.max(maxDelay, d);
+			}
+		}
+		if (lastSeq < 0 || seq < lastSeq || seq - lastSeq > ringLen - 2 - maxDelay) {
 			lastSeq = Math.max(0, seq - 1); // start, engine restart, or we fell behind
 		}
 		int fed = 0;
 		frameRms = bands.getFloat(HDR_OFF + 28);
 		double pos = heardPosition();
 		for (long k = lastSeq; k < seq; k++) {
-			int off = RING_OFF + (int) (k % ringLen) * BANDS_N * 4;
 			for (int b = 0; b < BANDS_N; b++) {
-				double lin = Math.max(bands.getFloat(off + b * 4), 1e-9f);
+				long kb = k - delay[b];
+				double lin = kb < 0 ? 1e-9
+						: Math.max(bands.getFloat(RING_OFF + (int) (kb % ringLen) * BANDS_N * 4 + b * 4), 1e-9f);
 				linRow[b] = lin;
 				double db = 20.0 * Math.log10(lin);
 				row[b] = BeatTracker.clamp((db - DB_FLOOR) / -DB_FLOOR, 0.0, 1.0);
