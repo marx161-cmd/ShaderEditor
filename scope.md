@@ -573,3 +573,16 @@ Decided (JamesDSP-src SCOPE.md 2026-10-22 ~13:00 is the engine side of the same 
 - NOT in this version: per-band group-delay alignment (desktop comp_rows). Open question to the
   user: full alignment costs ~280 ms visual latency at A0; proposal = cap at 100 ms, knob in a
   file next to beat_offset_ms.txt. Bluetooth output latency reported by the HAL is 189 ms.
+
+## 2026-10-22 ~13:40 — v109: per-band group-delay alignment, full (user: "we can account for the offset")
+
+User's call on the open question: no cap. The output-latency offset is handled on-device by the
+beat clock's offset file (the HAL reports 189 ms Bluetooth latency anyway), and the desktop
+side delivers latency-adjusted timings too, so aligning every band to its slowest neighbour
+costs nothing perceptually. Implemented like renderer.py comp_rows(): JdspBandsFeed keeps a
+64-frame local raw ring, reads band b DELAY_S[b] frames later for `bands`, `bands_db` and every
+row of `bands_hist`; DELAY_S = band_filters.delays_s() for the v3 engine's Butterworth bank
+(max 17 frames at 60 Hz). `bands_db` is now computed here from the aligned raw history with the
+engine's norm_db + 60/70 ms envelope constants (the engine's own cooked frame stays in the file
+for other consumers). v2 engines are read unshifted. Features stay the engine's unaligned
+values, as the desktop's are.

@@ -30,6 +30,18 @@ import java.nio.file.StandardOpenOption;
  * Stale detection: when the sequence number stops advancing for STALE_NS
  * (paused player, effect detached, JDSP off) every array is zeroed, so a
  * wallpaper never keeps showing the last spectrum frozen in place.
+ *
+ * Alignment (v109, same as comrade's renderer.py comp_rows()): every band
+ * filter rings for its own group delay (283 ms at A0 down to ~2 ms at A8 for
+ * the v3 engine's Butterworth bank), so without correction the bass rows lag
+ * the treble rows on screen. Each band is therefore read DELAY_S[b] later
+ * from a local history, so all 108 line up with each other; the global
+ * output-latency offset is the beat clock's business, as on the desktop.
+ * The cooked (desktop-semantics) frame is rebuilt here from the aligned raw
+ * history with the engine's own norm_db + envelope constants, because the
+ * engine only rings the raw frames. Alignment is applied only for a v3
+ * engine (whose filter design these delays belong to); a v2 engine's
+ * single-biquad bank is read unshifted.
  */
 final class JdspBandsFeed {
 	static final int N = 108;
@@ -51,10 +63,28 @@ final class JdspBandsFeed {
 	private static final long REMAP_INTERVAL_NS = 1_000_000_000L;
 	private static final double DB_FLOOR = -60.0;
 
-	final float[] raw = new float[N];
-	final float[] cooked = new float[N];
-	final float[] hist = new float[N * HIST];   // row r = r frames ago, row 0 newest
-	final float[] features = new float[FEATURES];
+	// Per-band group delay of the v3 engine's filter bank in seconds, from
+	// shader-backdrop band_filters.delays_s() (orders {2,2,2,3,3,4,4,4,4},
+	// 48 kHz); row = octave, A0 first. Converted to frames with frameHz.
+	private static final float[] DELAY_S = {
+			0.2834f, 0.2675f, 0.2524f, 0.2383f, 0.2249f, 0.2123f, 0.2004f, 0.1891f, 0.1785f, 0.1685f, 0.1590f, 0.1501f,
+			0.1417f, 0.1337f, 0.1262f, 0.1191f, 0.1124f, 0.1061f, 0.1002f, 0.0946f, 0.0893f, 0.0842f, 0.0795f, 0.0751f,
+			0.0708f, 0.0669f, 0.0631f, 0.0596f, 0.0562f, 0.0531f, 0.0501f, 0.0473f, 0.0446f, 0.0421f, 0.0398f, 0.0375f,
+			0.0501f, 0.0473f, 0.0446f, 0.0421f, 0.0398f, 0.0375f, 0.0354f, 0.0334f, 0.0316f, 0.0298f, 0.0281f, 0.0265f,
+			0.0250f, 0.0236f, 0.0223f, 0.0211f, 0.0199f, 0.0188f, 0.0177f, 0.0167f, 0.0158f, 0.0149f, 0.0141f, 0.0133f,
+			0.0164f, 0.0154f, 0.0146f, 0.0138f, 0.0130f, 0.0123f, 0.0116f, 0.0109f, 0.0103f, 0.0097f, 0.0092f, 0.0087f,
+			0.0082f, 0.0077f, 0.0073f, 0.0069f, 0.0065f, 0.0061f, 0.0058f, 0.0055f, 0.0052f, 0.0049f, 0.0046f, 0.0043f,
+			0.0041f, 0.0039f, 0.0036f, 0.0034f, 0.0032f, 0.0031f, 0.0029f, 0.0027f, 0.0026f, 0.0024f, 0.0023f, 0.0022f,
+			0.0020f, 0.0019f, 0.0018f, 0.0017f, 0.0016f, 0.0015f, 0.0014f, 0.0014f, 0.0013f, 0.0012f, 0.0011f, 0.0011f
+	};
+	private static final double ENV_ATTACK_MS = 60.0;    // engine BAND_ENV_ATTACK_MS
+	private static final double ENV_RELEASE_MS = 70.0;   // engine BAND_ENV_RELEASE_MS
+	private static final int LOCAL_HIST = 64;            // frames kept here (>= HIST + max delay)
+
+	final float[] raw = new float[N];                    // aligned latest raw frame
+	final float[] cooked = new float[N];                 // aligned cooked frame
+	final float[] hist = new float[N * HIST];            // aligned raw history, row 0 newest
+	final float[] features = new float[FEATURES];        // engine features (unaligned, as on the desktop)
 	int version;
 	float frameHz = 60f;
 	boolean live;
@@ -64,6 +94,15 @@ final class JdspBandsFeed {
 	private long lastMapTry;
 	private long lastSeq = -1;
 	private long lastChangeNanos;
+	// local rings, newest at (head) wrapping downwards; filled per engine frame
+	private final float[] rawRing = new float[N * LOCAL_HIST];
+	private final float[] cookedRing = new float[N * LOCAL_HIST];
+	private final double[] env = new double[N];
+	private int head = -1;
+	private long frames;
+	private final int[] delayFrames = new int[N];
+	private float delayHz;
+	private double attackCoef, releaseCoef;
 
 	/** @return true when the arrays changed (a new frame, or everything went stale). */
 	boolean poll(long now) {
@@ -93,35 +132,57 @@ final class JdspBandsFeed {
 			return false;
 		}
 		version = map.getInt(VER_OFF);
-		frameHz = hz;
-		for (int b = 0; b < N; b++) {
-			raw[b] = map.getFloat(b * 4);
-		}
-		int rows = Math.min(HIST, ringLen);
-		for (int r = 0; r < rows; r++) {
-			long k = seq - 1 - r;
-			if (k < 0) {
-				java.util.Arrays.fill(hist, r * N, (r + 1) * N, 0f);
-				continue;
-			}
-			int off = RING_OFF + (int) (k % ringLen) * N * 4;
+		if (hz != frameHz || delayHz != hz) {
+			frameHz = hz;
+			delayHz = hz;
+			attackCoef = Math.exp(-1.0 / (hz * ENV_ATTACK_MS / 1000.0));
+			releaseCoef = Math.exp(-1.0 / (hz * ENV_RELEASE_MS / 1000.0));
 			for (int b = 0; b < N; b++) {
-				hist[r * N + b] = map.getFloat(off + b * 4);
+				delayFrames[b] = version >= 3
+						? Math.min(LOCAL_HIST - HIST, Math.round(DELAY_S[b] * hz)) : 0;
+			}
+		}
+		if (lastSeq < 0 || seq < lastSeq || seq - lastSeq > ringLen - 2) {
+			// start, engine restart, or we fell behind the ring: resync on the
+			// newest frames only (two slots of margin against the writer, as
+			// BeatClock does), history restarts
+			lastSeq = Math.max(0, seq - Math.min(ringLen - 2, LOCAL_HIST));
+			head = -1;
+			frames = 0;
+			java.util.Arrays.fill(env, 0.0);
+			java.util.Arrays.fill(rawRing, 0f);
+			java.util.Arrays.fill(cookedRing, 0f);
+		}
+		for (long k = lastSeq; k < seq; k++) {
+			head = (head + 1) % LOCAL_HIST;
+			frames++;
+			int src = RING_OFF + (int) (k % ringLen) * N * 4;
+			int dst = head * N;
+			for (int b = 0; b < N; b++) {
+				float v = map.getFloat(src + b * 4);
+				rawRing[dst + b] = v;
+				double x = normDb(v);
+				double coef = x > env[b] ? attackCoef : releaseCoef;
+				env[b] = coef * env[b] + (1.0 - coef) * x;
+				cookedRing[dst + b] = (float) env[b];
+			}
+		}
+		// aligned outputs: band b, r frames ago = local row (r + delay_b) ago
+		for (int b = 0; b < N; b++) {
+			int d = delayFrames[b];
+			raw[b] = rawRing[rowAgo(d) * N + b];
+			cooked[b] = cookedRing[rowAgo(d) * N + b];
+			for (int r = 0; r < HIST; r++) {
+				hist[r * N + b] = rawRing[rowAgo(r + d) * N + b];
 			}
 		}
 		int cookedOff = RING_OFF + ringLen * N * 4;
 		int featOff = cookedOff + N * 4;
 		if (version >= 3 && mapSize >= featOff + FEATURES * 4L) {
-			for (int b = 0; b < N; b++) {
-				cooked[b] = map.getFloat(cookedOff + b * 4);
-			}
 			for (int i = 0; i < FEATURES; i++) {
 				features[i] = map.getFloat(featOff + i * 4);
 			}
 		} else {
-			for (int b = 0; b < N; b++) {
-				cooked[b] = normDb(raw[b]);
-			}
 			java.util.Arrays.fill(features, 0f);
 			features[0] = normDb(map.getFloat(RMS_OFF));
 		}
@@ -129,6 +190,15 @@ final class JdspBandsFeed {
 		lastChangeNanos = now;
 		live = true;
 		return true;
+	}
+
+	// Local ring row holding the frame `ago` frames before the newest; rows
+	// older than what was ever filled read as the oldest zero row.
+	private int rowAgo(int ago) {
+		if (ago >= frames) {
+			return (head + 1) % LOCAL_HIST;   // never written (still zero) or the oldest
+		}
+		return ((head - ago) % LOCAL_HIST + LOCAL_HIST) % LOCAL_HIST;
 	}
 
 	private boolean goStale(long now) {
@@ -147,6 +217,7 @@ final class JdspBandsFeed {
 	private boolean remap() {
 		map = null;
 		lastSeq = -1;
+		delayHz = 0f;   // re-derive delays: the file may now come from a v3 engine
 		if (!FILE.exists() || FILE.length() < RING_OFF) {
 			return false;
 		}
