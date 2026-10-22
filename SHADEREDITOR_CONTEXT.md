@@ -51,7 +51,10 @@ Feedback: `uniform sampler2D backbuffer;` (single-pass only, previous frame).
 
 - **DB user textures**: `uniform sampler2D <name>;` → user-uploaded bitmap via the picker.
 - **External texture bridge** (live, file-backed): declare `#define EXT_TEXTURE_<name> <fmt> <w> <h>` + `uniform sampler2D <name>;` → auto-binds raw `<name>.bin` from `~/.shader` (`/data/data/com.termux/files/home/.shader/`). `<fmt>` ∈ `rgba8` | `rgba16f` | `r32f`. File = exactly w×h×bytes, top-to-bottom rows (sample with `v = 1.0 - gl_FragCoord.y/resolution.y`). mtime-driven, ≤12 slots. Precedence: external < DB texture < camera/buffer.
-- **`bands`**: `uniform sampler2D bands;` = JDSP 108-band audio spectrum (R32F, one semitone/texel, band 0 = A0 ≈27.5 Hz). `texture2D(bands, vec2((i+0.5)/108.0, 0.5)).r`, or `texelFetch(bands, ivec2(i,0), 0).r` in ES3.
+- **`bands`**: `uniform sampler2D bands;` = JDSP 108-band audio spectrum, RAW linear RMS (R32F, one semitone/texel, band 0 = A0 ≈27.5 Hz). `texture2D(bands, vec2((i+0.5)/108.0, 0.5)).r`, or `texelFetch(bands, ivec2(i,0), 0).r` in ES3. v108 (2026-10-22): fed by sequence number at the engine's 60 Hz (was 30 Hz polling), zeroed when the feed stalls > 150 ms (pause / JDSP off).
+- **`bands_db`** (v108): `uniform sampler2D bands_db;` = the same 108 bands as the DESKTOP feed's `bands`: norm_db 0..1 over -60..0 dBFS with 60/70 ms attack/release (engine bands.bin v3; on an older engine it is norm_db of raw, no envelope). Use this when porting a comrade shader 1:1.
+- **`bands_hist`** (v108): `uniform sampler2D bands_hist;` = 108x32 R32F raw history, row 0 = newest frame, one row per 60 Hz frame (`texelFetch(bands_hist, ivec2(i, framesAgo), 0).r`).
+- **Audio feature uniforms** (v108, desktop names + conditioning from renderer.py): `u_rms u_sub u_bass u_lowmid u_mid u_highmid u_presence u_brilliance` (0..1, -40 dB floor), `u_centroid` (log 20 Hz..16 kHz), `u_flux`, `u_onset`, `u_onset_smooth` (150 ms EMA), `u_onset_accum`, `u_bass_accum` (integrals, additive time use). Engine bands.bin v3 required for anything but u_rms.
 
 ## New uniforms (this session)
 

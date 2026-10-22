@@ -113,15 +113,33 @@ final class BuiltinSystemUniforms {
 	private float batteryTemp;
 	private float mediaVolumeLevel;
 	private float mpvAudioLevelValue;
-	// JDSP 108-band bridge (bands.bin): raw float32, one per semitone, written
-	// by the native engine each 30Hz tick via mmap. Uploaded as an R32F
-	// sampler2D named "bands"; a shader reads band i with
-	// texture2D(bands, vec2((float(i)+0.5)/108.0, 0.5)).r
+	// JDSP 108-band bridge (bands.bin, see JdspBandsFeed): polled by sequence
+	// number so every 60 Hz frame is seen once. Three R32F samplers, each
+	// only uploaded when a program declares it:
+	//   bands       108x1  RAW linear RMS per semitone (unchanged meaning, so
+	//                      existing phone shaders keep their tuning)
+	//   bands_db    108x1  cooked frame = the desktop feed's `bands` (norm_db
+	//                      0..1 over -60..0 dBFS, enveloped)
+	//   bands_hist  108x32 raw history, row 0 newest, 60 Hz rows
+	// texture2D(bands, vec2((float(i)+0.5)/108.0, 0.5)).r, or texelFetch in ES3.
+	// Plus the desktop's audio feature uniforms (u_rms .. u_onset, u_onset_smooth,
+	// u_onset_accum, u_bass_accum), conditioned exactly as renderer.py does.
 	private GlDevice device;
+	private final JdspBandsFeed bandsFeed = new JdspBandsFeed();
 	private GlTexture2D bandsTexture;
-	private final float[] bandsData = new float[108];
-	private long lastBandsUpload;
-	private static final long BANDS_UPDATE_INTERVAL = 33333333L; // ~30Hz (ns)
+	private GlTexture2D bandsDbTexture;
+	private GlTexture2D bandsHistTexture;
+	private boolean hasBands;
+	private boolean hasBandsDb;
+	private boolean hasBandsHist;
+	private boolean hasAudioFeatures;
+	private boolean bandsDirty;
+	private long lastFeatureNanos;
+	private float onsetSmooth;
+	private float onsetAccum;
+	private float bassAccum;
+	private static final float ONSET_SMOOTH_TAU = 0.15f;  // renderer.py ONSET_SMOOTH_TAU
+	private static final float SHAPE_EXP = 3.0f;          // renderer.py SHAPE_EXP (bass accum)
 	// Shared beat clock, held only while a shader uses a beat uniform.
 	private boolean hasBeat;
 	// u_ms_* (beat/MusicState.java, same names + meanings as shader-backdrop music_state.py)
@@ -198,6 +216,21 @@ final class BuiltinSystemUniforms {
 				device,
 				programs,
 				ShaderRenderer.UNIFORM_SCREEN_LOCKED);
+		hasBands = anyHasUniform(device, programs, "bands");
+		hasBandsDb = anyHasUniform(device, programs, "bands_db");
+		hasBandsHist = anyHasUniform(device, programs, "bands_hist");
+		hasAudioFeatures = false;
+		for (String name : JdspBandsFeed.FEATURE_NAMES) {
+			hasAudioFeatures |= anyHasUniform(device, programs, "u_" + name);
+		}
+		hasAudioFeatures |= anyHasUniform(device, programs, "u_onset_smooth")
+				|| anyHasUniform(device, programs, "u_onset_accum")
+				|| anyHasUniform(device, programs, "u_bass_accum");
+		bandsDirty = true;
+		lastFeatureNanos = 0L;
+		onsetSmooth = 0f;
+		onsetAccum = 0f;
+		bassAccum = 0f;
 		hasBeat = false;
 		for (String name : new String[]{
 				ShaderRenderer.UNIFORM_BEAT_COUNT,
@@ -249,7 +282,7 @@ final class BuiltinSystemUniforms {
 	}
 
 	void apply(@NonNull ProgramBindings bindings, long now) {
-		applyBandsTexture(bindings, now);
+		applyBands(bindings, now);
 		if (hasBeat && beatClock == null) {
 			beatClock = BeatClock.acquire(context);
 		}
@@ -542,38 +575,72 @@ final class BuiltinSystemUniforms {
 		return values;
 	}
 
-	private static void readBandsFile(@NonNull float[] out) {
-		File file = new File("/data/data/com.termux.jdsp/files/bands.bin");
-		if (!file.exists() || file.length() < out.length * 4L) {
+	private void applyBands(@NonNull ProgramBindings bindings, long now) {
+		if (!(hasBands || hasBandsDb || hasBandsHist || hasAudioFeatures) || device == null) {
 			return;
 		}
-		try (FileInputStream in = new FileInputStream(file)) {
-			byte[] buf = new byte[out.length * 4];
-			if (in.read(buf) < buf.length) {
-				return;
+		// One mmap'd int per frame; uploads only when the engine published.
+		if (bandsFeed.poll(now)) {
+			bandsDirty = true;
+		}
+		if (bandsDirty) {
+			bandsDirty = false;
+			if (hasBands) {
+				if (bandsTexture == null) {
+					bandsTexture = device.createTexture2D();
+				}
+				device.updateFloatTexture2D(bandsTexture, bandsFeed.raw, JdspBandsFeed.N, 1);
 			}
-			ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
-			for (int i = 0; i < out.length; i++) {
-				out[i] = bb.getFloat();
+			if (hasBandsDb) {
+				if (bandsDbTexture == null) {
+					bandsDbTexture = device.createTexture2D();
+				}
+				device.updateFloatTexture2D(bandsDbTexture, bandsFeed.cooked, JdspBandsFeed.N, 1);
 			}
-		} catch (Exception ignored) {
-			// Missing/unreadable mid-write — keep the previous texture content.
+			if (hasBandsHist) {
+				if (bandsHistTexture == null) {
+					bandsHistTexture = device.createTexture2D();
+				}
+				device.updateFloatTexture2D(bandsHistTexture, bandsFeed.hist,
+						JdspBandsFeed.N, JdspBandsFeed.HIST);
+			}
 		}
-	}
-
-	private void applyBandsTexture(@NonNull ProgramBindings bindings, long now) {
-		if (bandsTexture == null && device != null) {
-			bandsTexture = device.createTexture2D();
+		if (hasBands) {
+			bindings.setTexture("bands", bandsTexture);
 		}
-		if (bandsTexture == null) {
-			return;
+		if (hasBandsDb) {
+			bindings.setTexture("bands_db", bandsDbTexture);
 		}
-		if (now - lastBandsUpload > BANDS_UPDATE_INTERVAL) {
-			lastBandsUpload = now;
-			readBandsFile(bandsData);
-			device.uploadFloatTexture2D(bandsTexture, bandsData, bandsData.length, 1);
+		if (hasBandsHist) {
+			bindings.setTexture("bands_hist", bandsHistTexture);
 		}
-		bindings.setTexture("bands", bandsTexture);
+		if (hasAudioFeatures) {
+			float dt = lastFeatureNanos == 0L ? 0f
+					: Math.min(0.1f, (now - lastFeatureNanos) / 1e9f);
+			lastFeatureNanos = now;
+			float[] f = bandsFeed.features;
+			// renderer.py: loudness features re-mapped from the plugin's -60 dB
+			// floor to -40 dB (y = 1.5x - 0.5), centroid log-mapped over
+			// 20 Hz..16 kHz, flux/onset passed through.
+			for (int i = 0; i < JdspBandsFeed.FEATURES; i++) {
+				String name = JdspBandsFeed.FEATURE_NAMES[i];
+				float v = f[i];
+				if (i <= 7) {
+					v = Math.min(1f, Math.max(0f, 1.5f * v - 0.5f));
+				} else if (i == 8) {
+					double hz = Math.max(20.0, v * 28160.0);
+					v = (float) Math.min(1.0, Math.log(hz / 20.0) / Math.log(16000.0 / 20.0));
+				}
+				bindings.setFloat("u_" + name, v);
+			}
+			float onset = f[10];
+			onsetSmooth += (onset - onsetSmooth) * Math.min(1f, dt / ONSET_SMOOTH_TAU);
+			onsetAccum += onset * dt;
+			bassAccum += (float) Math.pow(f[2], SHAPE_EXP) * dt;
+			bindings.setFloat("u_onset_smooth", onsetSmooth);
+			bindings.setFloat("u_onset_accum", onsetAccum);
+			bindings.setFloat("u_bass_accum", bassAccum);
+		}
 	}
 
 	private static float getMediaVolumeLevel(@NonNull Context context) {

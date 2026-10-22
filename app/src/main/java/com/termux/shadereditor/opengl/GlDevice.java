@@ -301,6 +301,30 @@ final class GlDevice {
 		texture.setSize(width, height);
 	}
 
+	// Re-fills an R32F texture in place (glTexSubImage2D) when its size is
+	// unchanged, allocating via uploadFloatTexture2D otherwise. Used for the
+	// 60 Hz band textures so no storage is re-created per frame.
+	void updateFloatTexture2D(@NonNull GlTexture2D texture,
+			@NonNull float[] data,
+			int width,
+			int height) {
+		if (texture.getWidth() != width || texture.getHeight() != height) {
+			uploadFloatTexture2D(texture, data, width, height);
+			return;
+		}
+		bindTexture(0, texture);
+		GLES20.glTexSubImage2D(
+				GLES20.GL_TEXTURE_2D,
+				0,
+				0,
+				0,
+				width,
+				height,
+				GLES30.GL_RED,
+				GLES30.GL_FLOAT,
+				FloatBuffer.wrap(data));
+	}
+
 	// Uploads raw RGBA8 bytes as an 8-bit RGBA texture. Works on ES2 and ES3.
 	void uploadRgba8Texture2D(@NonNull GlTexture2D texture,
 			@NonNull ByteBuffer data,

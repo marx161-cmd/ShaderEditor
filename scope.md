@@ -550,3 +550,26 @@ Decided (user, 2026-10-19):
 - Priority UNCHANGED (user: "like we got it rn, it works great"): cached map > desktop > tap > live tracker.
   The map / desktop still win while active; the tap tempo is no longer cleared by them, it resumes after.
 - Lawnchair opens its own menu on a one-finger long-press (~0.4 s): the second finger should land before that.
+
+## 2026-10-22 ~13:40 — v108: JDSP band feed read like the desktop reads its feed (user: "easy wins")
+
+Why: the phone meter publishes 60 Hz frames + a 32-frame ring (bands.bin v2, 2026-10-10) but
+BuiltinSystemUniforms re-read the first 432 bytes at 30 Hz, missed every other frame, kept a
+paused song's last spectrum frozen (no staleness check), re-created the texture storage every
+upload, and offered none of the desktop's feature uniforms, so desktop->phone ports had to
+re-derive loudness/onset per shader from raw linear RMS.
+Decided (JamesDSP-src SCOPE.md 2026-10-22 ~13:00 is the engine side of the same plan):
+- New `opengl/JdspBandsFeed`: mmap + sequence number, every engine frame seen once; zeroes
+  everything when seq stalls > 150 ms (pause, effect detached, JDSP off); understands v2 and
+  v3 files (v3 = cooked frame + 11 features after the ring) and re-maps when the file grows.
+- `bands` stays RAW (existing phone shaders keep their tuning). New samplers `bands_db`
+  (desktop-equivalent 0..1 cooked frame) and `bands_hist` (108x32 raw history, row 0 newest).
+  Each sampler is only uploaded when a program declares it; glTexSubImage2D after the first
+  allocation.
+- Feature uniforms with the desktop names and renderer.py's conditioning: u_rms u_sub u_bass
+  u_lowmid u_mid u_highmid u_presence u_brilliance (1.5x-0.5 floor re-map), u_centroid (log
+  20 Hz..16 kHz), u_flux, u_onset, u_onset_smooth (150 ms EMA), u_onset_accum, u_bass_accum
+  (bass^3 integral). On a v2 engine only u_rms carries data.
+- NOT in this version: per-band group-delay alignment (desktop comp_rows). Open question to the
+  user: full alignment costs ~280 ms visual latency at A0; proposal = cap at 100 ms, knob in a
+  file next to beat_offset_ms.txt. Bluetooth output latency reported by the HAL is 189 ms.
