@@ -41,7 +41,7 @@ public class WallpaperControlReceiver extends BroadcastReceiver {
 				id = findByName(context, name);
 				if (id < 1) {
 					Log.w(TAG, "no shader named " + name);
-					setResultCode(1);
+					result(1);
 					return;
 				}
 			}
@@ -52,7 +52,7 @@ public class WallpaperControlReceiver extends BroadcastReceiver {
 		}
 		if (id < 1) {
 			Log.w(TAG, "no shader id");
-			setResultCode(1);
+			result(1);
 			return;
 		}
 		if (id != current) {
@@ -64,7 +64,14 @@ public class WallpaperControlReceiver extends BroadcastReceiver {
 			becomeLiveWallpaper(context);   // e.g. after an app install reset it to the image
 		}
 		Log.i(TAG, action.substring(action.lastIndexOf('.') + 1) + " -> shader " + id);
-		setResultCode(0);
+		result(0);
+	}
+
+	// Only ordered broadcasts carry a result (Termux's am sends unordered ones).
+	private void result(int code) {
+		if (isOrderedBroadcast()) {
+			setResultCode(code);
+		}
 	}
 
 	// Hidden system API; ShaderEditor is ROM-signed UID 1000 (SET_WALLPAPER_COMPONENT).

@@ -28,6 +28,13 @@ public class ShaderView extends GLSurfaceView {
 	private static final Pattern PATTERN_KEEP_STATE = Pattern.compile(
 			"^#define[ \\t]+KEEP_STATE(?:[ \\t]+([0-9]+))?[ \\t]*$",
 			Pattern.MULTILINE);
+	// SIM FEED (v113): "#define FEED <name>" + one "#define FEED_EXPORT_<image>" per image to send back.
+	private static final Pattern PATTERN_FEED = Pattern.compile(
+			"^#define[ \\t]+FEED[ \\t]+([A-Za-z0-9_.-]+)[ \\t]*$",
+			Pattern.MULTILINE);
+	private static final Pattern PATTERN_FEED_EXPORT = Pattern.compile(
+			"^#define[ \\t]+FEED_EXPORT_([A-Za-z_][A-Za-z0-9_]*)\\b",
+			Pattern.MULTILINE);
 	private static final long NS_PER_SECOND = 1000000000L;
 	private static final long DEFAULT_VSYNC_NS = NS_PER_SECOND / 120;
 
@@ -89,6 +96,22 @@ public class ShaderView extends GLSurfaceView {
 		setPreserveEGLContextOnPause(keep);
 	}
 
+	public void setFeed(String src) {
+		String name = null;
+		java.util.ArrayList<String> exports = new java.util.ArrayList<>();
+		if (src != null) {
+			Matcher m = PATTERN_FEED.matcher(src);
+			if (m.find()) {
+				name = m.group(1);
+				Matcher e = PATTERN_FEED_EXPORT.matcher(src);
+				while (e.find()) {
+					exports.add(e.group(1));
+				}
+			}
+		}
+		renderer.setFeed(name, exports);
+	}
+
 	public static boolean parseKeepState(String src) {
 		if (src == null) {
 			return false;
@@ -126,6 +149,7 @@ public class ShaderView extends GLSurfaceView {
 
 	public void setFragmentShader(String src, float quality) {
 		setKeepState(parseKeepState(src));
+		setFeed(src);
 		onPause();
 		// When pasting text from other apps, e.g. Gmail, the
 		// text is sometimes tainted with useless non-ascii

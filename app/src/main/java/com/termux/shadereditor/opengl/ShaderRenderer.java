@@ -115,6 +115,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	private boolean programsReady;
 	private int surfaceWidth;
 	private int surfaceHeight;
+	private volatile SimFeed simFeed;   // "#define FEED <name>" (v113)
 
 	public ShaderRenderer(Context context) {
 		this.context = context;
@@ -132,12 +133,26 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		resetFps();
 	}
 
+	// Same feed + exports as before = keep the running one (its touch counters and mappings).
+	public void setFeed(String name, List<String> exports) {
+		SimFeed f = simFeed;
+		if (name == null) {
+			simFeed = null;
+		} else if (f == null || !f.getName().equals(name) || !f.getExports().equals(exports)) {
+			simFeed = new SimFeed(name, exports);
+		}
+	}
+
 	public void setKeepState(boolean keep) {
 		keepState = keep;
 	}
 
 	// Called by the view after the GL thread paused.
 	public void pause() {
+		SimFeed f = simFeed;
+		if (f != null) {
+			f.setVisible(false);
+		}
 		if (keepState) {
 			builtinUniforms.pauseListeners();
 			pausedAtNs = System.nanoTime();
@@ -159,6 +174,10 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public void onSurfaceCreated(GL10 gl, EGLConfig config) {
 		freshContext = true;
 		sourceChanged = false;
+		SimFeed f = simFeed;
+		if (f != null) {
+			f.releaseGl(null);           // the old context took its PBOs/FBO with it
+		}
 		device.resetState();
 		device.disable(GLES20.GL_CULL_FACE);
 		device.disable(GLES20.GL_BLEND);
@@ -213,6 +232,10 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	// while visible): free the old shader's GL objects, build the new one, fresh clock.
 	private void reloadInPlace() {
 		sourceChanged = false;
+		SimFeed f = simFeed;
+		if (f != null) {
+			f.releaseGl(device);
+		}
 		builtinUniforms.release();
 		renderPipeline.releaseTargets();
 		renderPipeline.releaseMultipassTargets();
@@ -234,6 +257,11 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		freshContext = false;
 		surfaceWidth = width;
 		surfaceHeight = height;
+		SimFeed feed = simFeed;
+		if (feed != null) {
+			feed.setCanvas(width, height);
+			feed.setVisible(true);
+		}
 		if (kept) {
 			long paused = pausedAtNs;
 			pausedAtNs = 0;
@@ -357,11 +385,18 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			}
 		}
 
+		SimFeed feed = simFeed;
+		if (feed != null) {
+			feed.apply(frame.bindings(), frame.now());
+		}
 		renderPipeline.renderMultipass(
 				frame.bindings(),
 				passes,
 				surfaceWidth,
 				surfaceHeight);
+		if (feed != null) {
+			feed.afterFrame(renderPipeline, device, frame.now());
+		}
 		captureMultipassThumbnail(frame.bindings());
 
 		if (onRendererListener != null) {
@@ -377,6 +412,10 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	public void touchAt(MotionEvent e) {
 		builtinUniforms.updateTouch(e);
+		SimFeed f = simFeed;
+		if (f != null) {
+			f.touch(e);
+		}
 	}
 
 	public void setOffset(float x, float y) {

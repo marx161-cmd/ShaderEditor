@@ -155,6 +155,7 @@ public class ShaderWallpaperService extends WallpaperService {
 						projectSession.getQuality());
 				view.setFpsCap(ShaderView.parseFpsCap(src));
 				view.setKeepState(ShaderView.parseKeepState(src));
+				view.setFeed(src);
 			}
 		}
 

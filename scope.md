@@ -636,3 +636,13 @@ Decided / built:
 - receiver/WallpaperControlReceiver (exported, sender needs WRITE_SECURE_SETTINGS = adb shell / UID 1000):
   SET_WALLPAPER --es shader <file name> (or --el id) and RELOAD_WALLPAPER (re-reads the current file). If
   ShaderEditor is not the live wallpaper (installs reset it) it calls the hidden setWallpaperComponent itself.
+
+## 2026-10-23 — v113: SIM FEED (#define FEED / FEED_EXPORT_<image>), beat-map read fix, intent result fix
+
+For the phone-ringbox port (decisions + layouts: ~/builds/amd/shader-backdrop/phone-ringbox/scope.md). New
+opengl/SimFeed.java: a Termux process feeds named uniforms through ~/.shader/feeds/<name>.bin (seqlocked,
+prev/cur per record, interpolated one producer step behind) and gets heartbeat/visibility, taps, 3-finger taps
+and FEED_EXPORT_<image> readbacks (PBO, every 6 frames) through <name>.in.bin. Multipass shaders only.
+BeatClock: beatmaps.json (35 MB) read with one exact-size byte read -- the StringBuilder growth needed a 128 MB
+char[] and threw a (retried) OutOfMemoryError on every app start. WallpaperControlReceiver: result codes only for
+ordered broadcasts (Termux's am logged an error otherwise).

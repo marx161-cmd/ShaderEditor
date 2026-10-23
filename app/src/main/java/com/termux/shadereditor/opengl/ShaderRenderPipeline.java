@@ -625,6 +625,13 @@ final class ShaderRenderPipeline {
 		}
 	}
 
+	// SimFeed exports (v113): the current (front) texture of a declared compute image, or null.
+	@androidx.annotation.Nullable
+	GlImageTexture getImage(@NonNull String name) {
+		ImageSet set = imageSets.get(name);
+		return set == null ? null : set.textures[set.front];
+	}
+
 	private static final class ImageSet {
 		@NonNull
 		final ComputeImageSpec spec;

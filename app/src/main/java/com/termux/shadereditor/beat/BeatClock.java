@@ -768,15 +768,16 @@ public final class BeatClock {
 		mapsModified = MAPS.lastModified();
 		List<Track> out = new ArrayList<>();
 		try {
-			StringBuilder sb = new StringBuilder();
-			try (BufferedReader r = new BufferedReader(new FileReader(MAPS))) {
-				char[] buf = new char[65536];
-				int n;
-				while ((n = r.read(buf)) > 0) {
-					sb.append(buf, 0, n);
-				}
+			// One exact-size read (v113): the growing StringBuilder needed a 128 MB char[] for the
+			// 35 MB file and hit an OutOfMemoryError + GC retry on every app start.
+			byte[] raw = new byte[(int) MAPS.length()];
+			try (java.io.DataInputStream in = new java.io.DataInputStream(
+					new java.io.FileInputStream(MAPS))) {
+				in.readFully(raw);
 			}
-			JSONArray tracks = new JSONObject(sb.toString()).getJSONArray("tracks");
+			String text = new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+			raw = null;
+			JSONArray tracks = new JSONObject(text).getJSONArray("tracks");
 			for (int i = 0; i < tracks.length(); i++) {
 				JSONObject o = tracks.getJSONObject(i);
 				JSONArray b = o.getJSONArray("beats");
