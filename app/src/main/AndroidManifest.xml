@@ -52,6 +52,15 @@
 				<action android:name="android.intent.action.ACTION_BATTERY_CHANGED"/>
 			</intent-filter>
 		</receiver>
+		<receiver
+			android:name=".receiver.WallpaperControlReceiver"
+			android:exported="true"
+			android:permission="android.permission.WRITE_SECURE_SETTINGS">
+			<intent-filter>
+				<action android:name="com.termux.shadereditor.action.SET_WALLPAPER"/>
+				<action android:name="com.termux.shadereditor.action.RELOAD_WALLPAPER"/>
+			</intent-filter>
+		</receiver>
 		<service
 			android:name=".service.ShaderWallpaperService"
 			android:description="@string/wallpaper_description"

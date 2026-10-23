@@ -77,6 +77,7 @@ final class RendererProgramManager {
 	@NonNull
 	private PreparedShaderSource preparedShaderSource = PreparedShaderSource.empty();
 	@NonNull
+	private final List<ShaderTextureResources> staleTextureResources = new ArrayList<>();
 	private ShaderTextureResources textureResources =
 			ShaderTextureResources.empty();
 	private int version = 2;
@@ -234,6 +235,12 @@ final class RendererProgramManager {
 
 	void discardContextResources() {
 		clearPrograms();
+		synchronized (staleTextureResources) {
+			for (ShaderTextureResources r : staleTextureResources) {
+				r.discard();
+			}
+			staleTextureResources.clear();
+		}
 		textureResources.discard();
 	}
 
@@ -286,8 +293,29 @@ final class RendererProgramManager {
 				source,
 				version,
 				maxTextures);
+		synchronized (staleTextureResources) {
+			staleTextureResources.add(textureResources);   // freed on the GL thread (releaseContextResources)
+		}
 		textureResources = ShaderTextureResources.create(
 				preparedShaderSource.getSamplers());
+	}
+
+	// In-place reload in a LIVE context (KEEP_STATE / source change, v112): delete what the old
+	// shader owns before reload() builds the new one. Must run on the GL thread.
+	void releaseContextResources(@NonNull GlDevice device) {
+		device.deleteProgram(surfaceProgram);
+		device.deleteProgram(mainProgram);
+		for (PassProgram pass : passPrograms) {
+			device.deleteProgram(pass.program());
+		}
+		clearPrograms();
+		synchronized (staleTextureResources) {
+			for (ShaderTextureResources r : staleTextureResources) {
+				r.release(device);
+			}
+			staleTextureResources.clear();
+		}
+		textureResources.release(device);
 	}
 
 	private void clearPrograms() {

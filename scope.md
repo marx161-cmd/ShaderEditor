@@ -598,3 +598,41 @@ delay-aligned rows (beat_track.py:176). BeatClock now reads band b of frame k fr
 k - delay_b (JdspBandsFeed.delayFrames, v3 engines only), resyncs when it falls behind by more
 than ringLen - 2 - maxDelay frames. Map / tap / desktop sources are absolute and unaffected; the
 global output-latency offset stays the offset file's job.
+
+## 2026-10-23 — v111: per-shader frame-rate cap `#define FPS_CAP <n>` (user: "that would unlock loads of stuff")
+
+Why: the wallpaper drew on every vsync (120 Hz) with no way to ask for less, so "30 fps" only ever meant
+"misses 120, stutters, GPU flat out" -- the reason every phone port was sized for ~8 ms. Slow scenes (orbits,
+rings, the dwarf diorama) don't need 120, and the user already avoids the diorama because it heats the battery.
+Decided:
+- Opt-in per shader, same style as FTIME_PERIOD: a line `#define FPS_CAP 30` anywhere in the source (any
+  integer 1..119; absent, 0 or >= the display rate = today's behaviour, every vsync).
+- Paced on vsync: GLSurfaceView goes to RENDERMODE_WHEN_DIRTY and a Choreographer callback requests a render
+  once at least 1/cap s minus half a vsync has passed -> 30 on a 120 Hz panel = every 4th vsync, even cadence.
+  The display rate is measured from the vsync callbacks, so 60/90 Hz panels work too.
+- Applies to the wallpaper AND the in-app preview (judge it where you edit it). Battery-low WHEN_DIRTY mode
+  still wins (no pacing then). Paused/invisible = pacer stopped.
+- `time`/`ftime`/date uniforms are wall-clock, unaffected. `frame` counts drawn frames, so a shader that steps
+  a simulation once per frame runs at cap/120 speed -- that shader's author decides.
+- NOT in v111: Surface.setFrameRate() hint (lets the panel itself drop refresh = extra display power). Left out
+  until the GPU saving is seen, because a wallpaper vote could also change the launcher's refresh.
+
+## 2026-10-23 — v112: KEEP_STATE (opt-in), in-place reload, wallpaper control intent
+
+Why (user): the ringbox port's brain lives in Termux and survives app switches, but every shader's GPU state was
+wiped on each hide (GLSurfaceView default: EGL context destroyed on pause), so the ring would refill under moons
+that had already cleared it. User: make keeping it OPT-IN per shader; and "add an intent so you can restart and
+switch without me needing to pick stuff in the editor".
+Decided / built:
+- `#define KEEP_STATE` (or `KEEP_STATE 1`; `0` = off): setPreserveEGLContextOnPause(true) for that shader. Hidden =
+  GL thread paused with every buffer kept; only listeners stop (sensors, mic, beat clock, camera). On resume (same
+  size) the clock skips the hidden span (time stands still while hidden), `frame` keeps counting, uniforms are
+  reconfigured on the GL thread. Android can still drop the context (memory pressure, reboot) -> normal fresh start.
+  Cost: the shader's GPU memory stays allocated while hidden (diorama ~14 MB; phone has 16 GB shared).
+- IN-PLACE RELOAD for every shader: the source used to compile only when a NEW context was made (the next hide/
+  show after "Update wallpaper"). Now setFragmentShader flags it and the next frame frees the old programs,
+  targets, compute images and textures (stale texture sets queued for the GL thread) and builds the new shader
+  with a fresh clock. "Update wallpaper" keeps working; changes also apply while the wallpaper is visible.
+- receiver/WallpaperControlReceiver (exported, sender needs WRITE_SECURE_SETTINGS = adb shell / UID 1000):
+  SET_WALLPAPER --es shader <file name> (or --el id) and RELOAD_WALLPAPER (re-reads the current file). If
+  ShaderEditor is not the live wallpaper (installs reset it) it calls the hidden setWallpaperComponent itself.

@@ -30,6 +30,12 @@ public class ShaderWallpaperService extends WallpaperService {
 		return engine != null;
 	}
 
+	public static void reloadShader() {
+		if (engine != null) {
+			engine.setShader();
+		}
+	}
+
 	public static void setRenderMode(int renderMode) {
 		if (engine != null) {
 			engine.setRenderMode(renderMode);
@@ -143,9 +149,12 @@ public class ShaderWallpaperService extends WallpaperService {
 		private void setShader() {
 			ShaderProjectSession projectSession = openWallpaperProjectSession();
 			if (view != null && projectSession != null) {
+				String src = projectSession.getEntryPointSource();
 				view.getRenderer().setFragmentShader(
-						projectSession.getEntryPointSource(),
+						src,
 						projectSession.getQuality());
+				view.setFpsCap(ShaderView.parseFpsCap(src));
+				view.setKeepState(ShaderView.parseKeepState(src));
 			}
 		}
 

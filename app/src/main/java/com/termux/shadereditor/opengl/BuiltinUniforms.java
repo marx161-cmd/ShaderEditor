@@ -230,6 +230,22 @@ final class BuiltinUniforms {
 		clearConfiguration();
 	}
 
+	// KEEP_STATE (scope.md 2026-10-23, v112): the GL context survives the pause, so only the
+	// listeners stop here (sensors, mic, beat clock, camera). GL-owned textures stay; the next
+	// configure() on the GL thread releases and rebuilds the modules properly.
+	void pauseListeners() {
+		sensorUniforms.release();
+		systemUniforms.release();
+		cameraUniforms.release();
+	}
+
+	// KEEP_STATE: time stands still while hidden (the clock skips the paused span, frame keeps counting).
+	void skipClock(long pausedNs) {
+		if (pausedNs > 0) {
+			startTime += pausedNs;
+		}
+	}
+
 	private void bindFrameUniforms(
 			@NonNull ProgramBindings bindings,
 			float delta) {

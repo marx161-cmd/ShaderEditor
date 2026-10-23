@@ -107,6 +107,14 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	private volatile int lastFps;
 	private volatile float refreshRate = DEFAULT_REFRESH_RATE;
 	private float quality = 1f;
+	// KEEP_STATE + in-place reload (scope.md 2026-10-23, v112)
+	private volatile boolean sourceChanged;
+	private volatile boolean keepState;
+	private volatile long pausedAtNs;
+	private boolean freshContext;
+	private boolean programsReady;
+	private int surfaceWidth;
+	private int surfaceHeight;
 
 	public ShaderRenderer(Context context) {
 		this.context = context;
@@ -120,7 +128,22 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	public void setFragmentShader(String source, float quality) {
 		setQuality(quality);
 		programManager.setFragmentShader(source);
+		sourceChanged = true;   // reloaded on the next frame if no new context does it first
 		resetFps();
+	}
+
+	public void setKeepState(boolean keep) {
+		keepState = keep;
+	}
+
+	// Called by the view after the GL thread paused.
+	public void pause() {
+		if (keepState) {
+			builtinUniforms.pauseListeners();
+			pausedAtNs = System.nanoTime();
+		} else {
+			builtinUniforms.release();
+		}
 	}
 
 	public void setQuality(float quality) {
@@ -134,6 +157,8 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	@Override
 	public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+		freshContext = true;
+		sourceChanged = false;
 		device.resetState();
 		device.disable(GLES20.GL_CULL_FACE);
 		device.disable(GLES20.GL_BLEND);
@@ -146,32 +171,55 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			submitErrors(thumbnailErrors);
 		}
 
+		loadProgram();
+	}
+
+	private void loadProgram() {
+		programsReady = false;
 		if (programManager.hasPreparedShader()) {
 			resetFps();
 			var reloadResult = programManager.reload(context, device);
 			submitErrors(reloadResult.textureErrors());
 			if (reloadResult.succeeded()) {
 				submitErrors(Collections.emptyList());
-				List<GlProgram> programs;
-				if (programManager.isMultipass()) {
-					programs = programManager.getPassPrograms().stream()
-							.map(RendererProgramManager.PassProgram::program)
-							.toList();
-				} else {
-					programs = List.of(programManager.getMainProgram());
-				}
-				builtinUniforms.configure(
-						device,
-						programs,
-						programManager.getFTimeMax(),
-						programManager.getTextureResources(),
-						programManager.isMultipass(),
-						programManager.getExternalTextures(),
-						programManager.isGles3());
+				programsReady = true;
+				configureUniforms();
 			} else if (!reloadResult.programErrors().isEmpty()) {
 				submitErrors(reloadResult.programErrors());
 			}
 		}
+	}
+
+	private void configureUniforms() {
+		List<GlProgram> programs;
+		if (programManager.isMultipass()) {
+			programs = programManager.getPassPrograms().stream()
+					.map(RendererProgramManager.PassProgram::program)
+					.toList();
+		} else {
+			programs = List.of(programManager.getMainProgram());
+		}
+		builtinUniforms.configure(
+				device,
+				programs,
+				programManager.getFTimeMax(),
+				programManager.getTextureResources(),
+				programManager.isMultipass(),
+				programManager.getExternalTextures(),
+				programManager.isGles3());
+	}
+
+	// The source changed while the context is alive (KEEP_STATE pause, or "Update wallpaper"
+	// while visible): free the old shader's GL objects, build the new one, fresh clock.
+	private void reloadInPlace() {
+		sourceChanged = false;
+		builtinUniforms.release();
+		renderPipeline.releaseTargets();
+		renderPipeline.releaseMultipassTargets();
+		programManager.releaseContextResources(device);
+		loadProgram();
+		surfaceState = builtinUniforms.updateSurface(
+				surfaceWidth, surfaceHeight, System.nanoTime());
 	}
 
 	@Override
@@ -179,6 +227,23 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		long now = System.nanoTime();
 		lastRender = now;
 		refreshRate = getRefreshRate(context);
+		// KEEP_STATE resume: same context, same size -> keep every buffer, the clock skips the
+		// hidden span, only the listeners come back.
+		boolean kept = !freshContext && programsReady &&
+				width == surfaceWidth && height == surfaceHeight;
+		freshContext = false;
+		surfaceWidth = width;
+		surfaceHeight = height;
+		if (kept) {
+			long paused = pausedAtNs;
+			pausedAtNs = 0;
+			if (paused > 0) {
+				builtinUniforms.skipClock(now - paused);
+			}
+			configureUniforms();
+			resetFps();
+			return;
+		}
 		surfaceState = builtinUniforms.updateSurface(width, height, now);
 		if (surfaceState.renderTargetsChanged()) {
 			renderPipeline.releaseTargets();
@@ -190,6 +255,9 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	@Override
 	public void onDrawFrame(GL10 gl) {
+		if (sourceChanged && !freshContext) {
+			reloadInPlace();
+		}
 		if (programManager.isMultipass()) {
 			renderMultipassFrame();
 		} else {
@@ -304,7 +372,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	}
 
 	public void unregisterListeners() {
-		builtinUniforms.release();
+		pause();
 	}
 
 	public void touchAt(MotionEvent e) {
