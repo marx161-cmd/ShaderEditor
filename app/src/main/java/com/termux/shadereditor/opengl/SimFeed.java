@@ -44,6 +44,11 @@ final class SimFeed {
 	private static final long TAP_MAX_NS = 250_000_000L;
 	private static final float TAP_SLOP_PX = 40f;
 	private static final long RETRY_NS = 1_000_000_000L;
+	// PLAYBACK (v114): the producer's steps arrive irregularly (Termux brain: 12..63 ms around 33), so the uniforms
+	// are played back from a history of snapshots at a FIXED delay behind the newest, interpolated between the two
+	// snapshots that bracket that moment. Larger than the producer's worst step interval.
+	private static final double DELAY_S = 0.080;
+	private static final int HIST = 8;
 
 	@NonNull
 	private final String name;
@@ -64,6 +69,13 @@ final class SimFeed {
 	private final float[][] out = new float[MAX_REC][];
 	private double tPrev;
 	private double tCur;
+	// snapshot ring: time, values (MAX_REC x 4), interp flags (prev -> this snapshot)
+	private final double[] histT = new double[HIST];
+	private final float[][] histV = new float[HIST][MAX_REC * 4];
+	private final boolean[][] histI = new boolean[HIST][MAX_REC];
+	private int histN;
+	private int histHead;                  // index of the newest snapshot
+	private double lastTs;
 	private final byte[] recBytes = new byte[MAX_REC * REC];
 
 	// inbox (write)
@@ -158,25 +170,63 @@ final class SimFeed {
 
 	// ---- per frame (GL thread) ----
 	void apply(@NonNull List<ProgramBindings> bindings, long nowNs) {
-		if (!readFeed(nowNs) || count == 0) {
+		if (!readFeed(nowNs) || count == 0 || histN == 0) {
 			return;
 		}
-		double now = nowNs / 1e9;
-		double step = tCur - tPrev;
-		float a = 1f;
-		if (step > 1e-4 && now - tCur < 0.25) {
-			a = (float) Math.max(0.0, Math.min(1.0, (now - step - tPrev) / step));
+		double ts = nowNs / 1e9 - DELAY_S;
+		// u_feedDt (v115): the step between this frame's sample moment and the last one -- the shader's own sim
+		// (ring grains) advances on the SAME clock as the played-back bodies and camera
+		float feedDt = lastTs > 0 ? (float) Math.max(0.0, Math.min(0.1, ts - lastTs)) : 0f;
+		lastTs = ts;
+		// bracketing snapshots a (older) <= ts <= b (newer); clamp at both ends (no extrapolation)
+		int b = histHead, a = histHead;
+		for (int k = 0; k < histN - 1; ++k) {
+			int newer = (histHead - k + HIST) % HIST;
+			int older = (newer - 1 + HIST) % HIST;
+			a = b = older;
+			if (histT[older] <= ts) {
+				b = newer;
+				break;
+			}
 		}
+		if (ts >= histT[histHead]) {
+			a = b = histHead;
+		}
+		float t = 1f;
+		double h = histT[b] - histT[a];
+		if (a != b && h > 1e-6) {
+			t = (float) Math.max(0.0, Math.min(1.0, (ts - histT[a]) / h));
+		}
+		// Catmull-Rom (v115, non-uniform times): a curve through the neighbours instead of straight segments,
+		// so a camera on a curving path has no kink at every producer step. One-sided where a neighbour is
+		// missing or that transition was flagged discontinuous.
+		int a0 = (a - 1 + HIST) % HIST, b1 = (b + 1) % HIST;
+		boolean hasA0 = a != b && (histHead - a + HIST) % HIST + 1 <= histN - 1;   // a0 inside the kept history
+		boolean hasB1 = a != b && b != histHead && histT[b1] > histT[b];
+		float t2 = t * t, t3 = t2 * t;
+		float h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+		float[] va = histV[a], vb = histV[b], v0 = histV[a0], v3 = histV[b1];
+		boolean[] ib = histI[b], ia = histI[a], i3 = histI[b1];
 		for (int i = 0; i < count; ++i) {
 			float[] o = out[i];
-			float[] p = prev[i];
-			float[] c = cur[i];
+			boolean lerp = ib[i] && a != b;
 			for (int k = 0; k < comps[i]; ++k) {
-				o[k] = interp[i] ? p[k] + (c[k] - p[k]) * a : c[k];
+				float p1 = va[i * 4 + k], p2 = vb[i * 4 + k];
+				if (!lerp) {
+					o[k] = p2;
+					continue;
+				}
+				double sec = (p2 - p1) / h;
+				double m1 = hasA0 && ia[i] ? (p2 - v0[i * 4 + k]) / (histT[b] - histT[a0]) : sec;
+				double m2 = hasB1 && i3[i] ? (v3[i * 4 + k] - p1) / (histT[b1] - histT[a]) : sec;
+				o[k] = (float) (h00 * p1 + h10 * h * m1 + h01 * p2 + h11 * h * m2);
 			}
-			for (ProgramBindings b : bindings) {
-				set(b, i, o);
+			for (ProgramBindings pb : bindings) {
+				set(pb, i, o);
 			}
+		}
+		for (ProgramBindings pb : bindings) {
+			pb.setFloat("u_feedDt", feedDt);
 		}
 	}
 
@@ -230,6 +280,7 @@ final class SimFeed {
 			String nm = new String(recBytes, o, len, StandardCharsets.US_ASCII);
 			if (!nm.equals(names[i])) {
 				names[i] = nm;
+				histN = 0;                           // the record layout changed: old snapshots don't apply
 			}
 			kinds[i] = recBytes[o + 32];
 			comps[i] = Math.max(1, Math.min(4, recBytes[o + 33]));
@@ -242,11 +293,31 @@ final class SimFeed {
 				out[i] = new float[comps[i]];
 			}
 		}
+		if (n != count) {
+			histN = 0;
+		}
 		count = n;
 		tPrev = tp;
 		tCur = tc;
 		lastSeq = seq1;
+		if (histN == 0) {                        // seed with the file's previous snapshot too
+			push(tp, prev, null);
+		}
+		if (histN == 0 || tc > histT[histHead]) {
+			push(tc, cur, interp);
+		}
 		return true;
+	}
+
+	private void push(double t, @NonNull float[][] v, @Nullable boolean[] ip) {
+		histHead = (histHead + 1) % HIST;
+		histT[histHead] = t;
+		float[] dst = histV[histHead];
+		for (int i = 0; i < count; ++i) {
+			System.arraycopy(v[i], 0, dst, i * 4, 4);
+			histI[histHead][i] = ip != null && ip[i];
+		}
+		histN = Math.min(histN + 1, HIST);
 	}
 
 	void afterFrame(@NonNull ShaderRenderPipeline pipeline, @NonNull GlDevice device, long nowNs) {

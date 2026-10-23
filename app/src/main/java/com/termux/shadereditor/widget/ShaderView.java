@@ -195,6 +195,9 @@ public class ShaderView extends GLSurfaceView {
 			return;
 		}
 		pacing = run;
+		if (!run) {
+			renderer.setPacedFrame(0L);
+		}
 		Choreographer choreographer = Choreographer.getInstance();
 		choreographer.removeFrameCallback(pacer);
 		if (run) {
@@ -220,6 +223,7 @@ public class ShaderView extends GLSurfaceView {
 		if (cap > 0 && frameTimeNanos - lastPacedNs >=
 				NS_PER_SECOND / cap - vsyncNs / 2) {
 			lastPacedNs = frameTimeNanos;
+			renderer.setPacedFrame(frameTimeNanos);   // v114: presentation time + feed sample time
 			requestRender();
 		}
 		Choreographer.getInstance().postFrameCallback(pacer);

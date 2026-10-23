@@ -646,3 +646,13 @@ and FEED_EXPORT_<image> readbacks (PBO, every 6 frames) through <name>.in.bin. M
 BeatClock: beatmaps.json (35 MB) read with one exact-size byte read -- the StringBuilder growth needed a 128 MB
 char[] and threw a (retried) OutOfMemoryError on every app start. WallpaperControlReceiver: result codes only for
 ordered broadcasts (Termux's am logged an error otherwise).
+
+## 2026-10-24 — v114: even frame pacing (presentation timestamps) + SIM FEED history playback
+
+FPS_CAP frames get eglPresentationTimeANDROID = the vsync the pacer requested + 50 ms (33 ms let ~25 % of frames
+slip a vsync); result on the Pixel: 58/58 frames exactly 2 vsyncs apart at cap 60 (was 1..4). SimFeed keeps 8
+snapshots and plays them back at a fixed 80 ms delay, sampled at the frame's presentation time (producer steps
+were 12..63 ms apart). Details: phone-ringbox/scope.md.
+
+## 2026-10-24 — v115: SIM FEED Catmull-Rom playback + u_feedDt
+Curve through 4 snapshots instead of straight segments (camera kinks at each producer step); u_feedDt (s) = the step between consecutive frames' sample moments, so a feed shader can advance its own sim on the same clock as the played-back uniforms.

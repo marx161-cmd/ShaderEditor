@@ -116,6 +116,12 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	private int surfaceWidth;
 	private int surfaceHeight;
 	private volatile SimFeed simFeed;   // "#define FEED <name>" (v113)
+	// FPS_CAP frames (v114): the vsync the pacer requested this frame for; each frame is presented at that vsync +
+	// PRESENT_LATENCY_NS (eglPresentationTimeANDROID), so frames land evenly spaced instead of 1..4 vsyncs apart,
+	// and the feed is sampled for that same moment. 0 = not paced (present as soon as possible).
+	private static final long PRESENT_LATENCY_NS = 50_000_000L;   // 33 ms: 13 of 54 frames ready < 2 ms before target -> slipped a vsync
+	private volatile long pacedFrameNs;
+	private long presentNs;
 
 	public ShaderRenderer(Context context) {
 		this.context = context;
@@ -141,6 +147,10 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		} else if (f == null || !f.getName().equals(name) || !f.getExports().equals(exports)) {
 			simFeed = new SimFeed(name, exports);
 		}
+	}
+
+	public void setPacedFrame(long frameTimeNanos) {
+		pacedFrameNs = frameTimeNanos;
 	}
 
 	public void setKeepState(boolean keep) {
@@ -286,6 +296,14 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		if (sourceChanged && !freshContext) {
 			reloadInPlace();
 		}
+		long paced = pacedFrameNs;
+		presentNs = paced > 0 ? paced + PRESENT_LATENCY_NS : 0L;
+		if (presentNs > 0) {
+			android.opengl.EGLExt.eglPresentationTimeANDROID(
+					android.opengl.EGL14.eglGetCurrentDisplay(),
+					android.opengl.EGL14.eglGetCurrentSurface(android.opengl.EGL14.EGL_DRAW),
+					presentNs);
+		}
 		if (programManager.isMultipass()) {
 			renderMultipassFrame();
 		} else {
@@ -387,7 +405,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 		SimFeed feed = simFeed;
 		if (feed != null) {
-			feed.apply(frame.bindings(), frame.now());
+			feed.apply(frame.bindings(), presentNs > 0 ? presentNs : frame.now());
 		}
 		renderPipeline.renderMultipass(
 				frame.bindings(),
