@@ -220,6 +220,8 @@ public final class ShaderControls {
 			v.setTextViewText(R.id.status, body);
 			v.setViewVisibility(R.id.status, View.VISIBLE);
 		}
+		// two rows of four (2026-10-26): the second row only when there are more than four buttons
+		v.setViewVisibility(R.id.row1, labels.length > 4 ? View.VISIBLE : View.GONE);
 		for (int i = 0; i < MAX; ++i) {
 			if (i >= labels.length) {
 				v.setViewVisibility(BUTTON_VIEWS[i], View.GONE);

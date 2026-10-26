@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2026-10-26 (user: "why is the shader editor island pill so crammed"): two rows of four 44 dp buttons, the same
+     look as the Cybersyn island remote (stub2 island_remote.xml), instead of one 40 dp row of eight. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:orientation="vertical"
+	android:padding="4dp">
+	<TextView
+		android:id="@+id/status"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginBottom="2dp"
+		android:maxLines="3"
+		android:textColor="#FFB0B0C0"
+		android:textSize="12sp"
+		android:visibility="gone"/>
+	<LinearLayout
+		android:id="@+id/row0"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:orientation="horizontal">
+		<Button android:id="@+id/btn0" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn1" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn2" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn3" style="@style/IslandButton"/>
+	</LinearLayout>
+	<LinearLayout
+		android:id="@+id/row1"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:orientation="horizontal">
+		<Button android:id="@+id/btn4" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn5" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn6" style="@style/IslandButton"/>
+		<Button android:id="@+id/btn7" style="@style/IslandButton"/>
+	</LinearLayout>
+</LinearLayout>

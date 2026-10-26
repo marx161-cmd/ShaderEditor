@@ -683,3 +683,9 @@ setProgress(100, first "NN %" of the status header, else 100) + the header as ti
 progress value is promoted by the dynamic bar (axdynamicbar NotificationIslandManager), which draws this notification's
 own button layout when the pill is opened (ExpandedOngoingContent.kt). Seen live: pill "normal · ri… 94%".
 Committed together with the uncommitted v116-v118 work that was already installed (control notification, feed bits).
+
+## 2026-10-26 19:35 — v120: island panel buttons as big as the Cybersyn remote's (user: "why is it so crammed")
+notification_controls.xml: two rows of four 44 dp buttons (style IslandButton: 12 sp, dark tint #2E2E3A, 2 dp margins),
+the second row only with > 4 buttons; was one 40 dp row of eight. The layout file was never committed with v116-v119;
+it is now. Still max 8 buttons (the feed's 8 counter slots). Installed via blazer-sysapp-update; the install reset the
+wallpaper to ImageWallpaper -> RELOAD_WALLPAPER broadcast put ShaderEditor back.
