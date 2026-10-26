@@ -8,6 +8,8 @@ import android.view.MotionEvent;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.termux.shadereditor.service.ShaderControls;
+
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -28,6 +30,7 @@ import java.util.List;
  * touches (tap count + position, 3-finger tap count), and each FEED_EXPORT image's red channel as u32,
  * read back through a PBO every EXPORT_EVERY frames (one export late, never a pipeline stall).</li>
  * </ul>
+ * Return header bytes 32..63: CONTROL NOTIFICATION button counters (v116), u32 each in BUTTON_ order.
  * Layouts must match phone-ringbox/brain.py.
  */
 final class SimFeed {
@@ -39,16 +42,26 @@ final class SimFeed {
 	private static final int MAX_REC = 256;
 	private static final int MAGIC = 0x31464252;      // "RBF1" little endian
 	private static final int IN_MAGIC = 0x31494252;   // "RBI1"
-	private static final int IN_TOUCH = 16;
+	// RETURN FILE v2 (v117): the touch block gained the 3-finger tap's position (the brain zones taps by screen half)
+	// and a GESTURE block carries the live pointers, so the brain can fly the camera from swipes/pinch/twist.
+	// v1 = boops/boop xy/3-finger count (16 bytes). v2 = 24 + 44 bytes, blob table after both.
+	private static final int IN_VERSION = 2;
+	private static final int TOUCH_OFF = HDR;                 // v2: 24 bytes
+	private static final int TOUCH_LEN = 24;
+	private static final int GEST_OFF = HDR + TOUCH_LEN;      // v2: 44 bytes (count, moved, seq, 4 x (x, y))
+	private static final int GEST_LEN = 44;
+	private static final int BLOB_OFF = GEST_OFF + GEST_LEN;
 	private static final int EXPORT_EVERY = 6;
 	private static final long TAP_MAX_NS = 250_000_000L;
 	private static final float TAP_SLOP_PX = 40f;
 	private static final long RETRY_NS = 1_000_000_000L;
-	// PLAYBACK (v114): the producer's steps arrive irregularly (Termux brain: 12..63 ms around 33), so the uniforms
-	// are played back from a history of snapshots at a FIXED delay behind the newest, interpolated between the two
-	// snapshots that bracket that moment. Larger than the producer's worst step interval.
-	private static final double DELAY_S = 0.080;
-	private static final int HIST = 8;
+	// PLAYBACK (v114, retuned v118): the producer's steps arrive irregularly -- the Pixel's Termux stalls up to
+	// 78-100 ms and then bursts. The playback delay must outlast the WORST STALL or the newest snapshot is older than
+	// the playback moment, the app clamps, and every body freezes and then jumps in unison (the "moons jitter
+	// together" symptom, 2026-10-25). 0.120 s covers a 100 ms stall with a snapshot to spare; HIST 12 keeps ~400 ms
+	// of history so a burst always finds its bracketing pair.
+	private static final double DELAY_S = 0.120;
+	private static final int HIST = 12;
 
 	@NonNull
 	private final String name;
@@ -93,11 +106,19 @@ final class SimFeed {
 	private volatile float boopX;
 	private volatile float boopY;
 	private volatile int taps3;
+	private volatile float tap3X;
+	private volatile float tap3Y;
 	private long downNs;
 	private float downX;
 	private float downY;
 	private int maxPointers;
 	private boolean moved;
+	// v117 gestures: live pointers in canvas px (y up) + a sequence id, written to the GEST block every frame
+	private final float[] ptrX = new float[4];
+	private final float[] ptrY = new float[4];
+	private volatile int ptrN;
+	private volatile int gestMoved;
+	private volatile int gestSeq;
 
 	// export readback
 	private GlFramebuffer fbo;
@@ -143,18 +164,34 @@ final class SimFeed {
 				downY = e.getY();
 				maxPointers = 1;
 				moved = false;
+				++gestSeq;                            // a new touch sequence: the brain re-anchors its gesture state
+				gestMoved = 0;
+				updatePointers(e);
 			}
-			case MotionEvent.ACTION_POINTER_DOWN ->
-					maxPointers = Math.max(maxPointers, e.getPointerCount());
+			case MotionEvent.ACTION_POINTER_DOWN -> {
+				maxPointers = Math.max(maxPointers, e.getPointerCount());
+				updatePointers(e);
+			}
 			case MotionEvent.ACTION_MOVE -> {
 				if (Math.abs(e.getX() - downX) > TAP_SLOP_PX ||
 						Math.abs(e.getY() - downY) > TAP_SLOP_PX) {
 					moved = true;
+					gestMoved = 1;
 				}
+				updatePointers(e);
 			}
 			case MotionEvent.ACTION_UP -> {
 				if (!moved && now - downNs < TAP_MAX_NS * (maxPointers >= 3 ? 2 : 1)) {
 					if (maxPointers >= 3) {
+						// v117: where the 3-finger tap happened (centroid, canvas px, y up) -> the brain's cam zones
+						int n = Math.max(1, e.getPointerCount());
+						float cx = 0f, cy = 0f;
+						for (int i = 0; i < n; ++i) {
+							cx += e.getX(i);
+							cy += e.getY(i);
+						}
+						tap3X = cx / n;
+						tap3Y = canvasH - cy / n;
 						++taps3;
 					} else if (maxPointers == 1) {
 						boopX = e.getX();
@@ -162,10 +199,26 @@ final class SimFeed {
 						++boops;
 					}
 				}
+				ptrN = 0;
 			}
+			case MotionEvent.ACTION_CANCEL -> ptrN = 0;
 			default -> {
 			}
 		}
+	}
+
+	/** v117: current pointers in canvas px (y up); a lifted finger simply leaves the remaining ones. */
+	private void updatePointers(@NonNull MotionEvent e) {
+		int n = Math.min(e.getPointerCount(), 4);
+		for (int i = 0; i < n; ++i) {
+			ptrX[i] = e.getX(i);
+			ptrY[i] = canvasH - e.getY(i);
+		}
+		for (int i = n; i < 4; ++i) {
+			ptrX[i] = 0f;
+			ptrY[i] = 0f;
+		}
+		ptrN = n;
 	}
 
 	// ---- per frame (GL thread) ----
@@ -334,7 +387,7 @@ final class SimFeed {
 		int n = exports.size();
 		exportOffsets = new int[n];
 		exportTexels = new int[n];
-		int o = HDR + IN_TOUCH + 4 + 8 * n;      // nblobs, then (offset, texels) per blob, then the blobs
+		int o = BLOB_OFF + 4 + 8 * n;            // nblobs, then (offset, texels) per blob, then the blobs
 		for (int i = 0; i < n; ++i) {
 			GlImageTexture t = pipeline.getImage(exports.get(i));
 			int texels = t == null ? 0 : t.getWidth() * t.getHeight();
@@ -347,10 +400,10 @@ final class SimFeed {
 		if (inbox == null) {
 			return false;
 		}
-		inbox.putInt(HDR + IN_TOUCH, n);
+		inbox.putInt(BLOB_OFF, n);
 		for (int i = 0; i < n; ++i) {
-			inbox.putInt(HDR + IN_TOUCH + 4 + 8 * i, exportOffsets[i]);
-			inbox.putInt(HDR + IN_TOUCH + 8 + 8 * i, exportTexels[i]);
+			inbox.putInt(BLOB_OFF + 4 + 8 * i, exportOffsets[i]);
+			inbox.putInt(BLOB_OFF + 8 + 8 * i, exportTexels[i]);
 		}
 		return true;
 	}
@@ -362,15 +415,27 @@ final class SimFeed {
 		}
 		m.putInt(8, ++inSeq | 1);                // odd = writing
 		m.putInt(0, IN_MAGIC);
-		m.putInt(4, 1);
+		m.putInt(4, IN_VERSION);
 		m.putInt(12, visible ? 1 : 0);
 		m.putDouble(16, nowNs / 1e9);
 		m.putFloat(24, canvasW);
 		m.putFloat(28, canvasH);
-		m.putInt(HDR, boops);
-		m.putFloat(HDR + 4, boopX);
-		m.putFloat(HDR + 8, boopY);
-		m.putInt(HDR + 12, taps3);
+		m.putInt(TOUCH_OFF, boops);
+		m.putFloat(TOUCH_OFF + 4, boopX);
+		m.putFloat(TOUCH_OFF + 8, boopY);
+		m.putInt(TOUCH_OFF + 12, taps3);
+		m.putFloat(TOUCH_OFF + 16, tap3X);       // v2: the 3-finger tap's position (canvas px, y up)
+		m.putFloat(TOUCH_OFF + 20, tap3Y);
+		m.putInt(GEST_OFF, ptrN);                // v2: live pointers -> the brain's gesture camera
+		m.putInt(GEST_OFF + 4, gestMoved);
+		m.putInt(GEST_OFF + 8, gestSeq);
+		for (int i = 0; i < 4; ++i) {
+			m.putFloat(GEST_OFF + 12 + 8 * i, ptrX[i]);
+			m.putFloat(GEST_OFF + 16 + 8 * i, ptrY[i]);
+		}
+		for (int i = 0; i < ShaderControls.MAX; ++i) {   // CONTROL NOTIFICATION presses (v116), header 32..63
+			m.putInt(32 + 4 * i, ShaderControls.count(i));
+		}
 		inSeq = (inSeq | 1) + 1;
 		m.putInt(8, inSeq);                      // even = complete
 	}

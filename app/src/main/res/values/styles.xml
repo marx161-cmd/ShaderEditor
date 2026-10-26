@@ -122,4 +122,19 @@
 		<item name="rippleColor">?attr/colorControlHighlight</item>
 		<item name="cornerRadius">0dp</item>
 	</style>
+	<!-- CONTROL NOTIFICATION buttons (v116, service/ShaderControls) -->
+	<style name="ControlButton" parent="@android:style/Widget.Material.Button.Borderless.Colored">
+		<item name="android:layout_width">0dp</item>
+		<item name="android:layout_height">match_parent</item>
+		<item name="android:layout_weight">1</item>
+		<item name="android:minWidth">0dp</item>
+		<item name="android:minHeight">0dp</item>
+		<item name="android:paddingLeft">2dp</item>
+		<item name="android:paddingRight">2dp</item>
+		<item name="android:textSize">13sp</item>
+		<item name="android:textAllCaps">false</item>
+		<item name="android:maxLines">1</item>
+		<item name="android:ellipsize">end</item>
+		<item name="android:visibility">gone</item>
+	</style>
 </resources>

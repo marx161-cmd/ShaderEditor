@@ -656,3 +656,30 @@ were 12..63 ms apart). Details: phone-ringbox/scope.md.
 
 ## 2026-10-24 — v115: SIM FEED Catmull-Rom playback + u_feedDt
 Curve through 4 snapshots instead of straight segments (camera kinks at each producer step); u_feedDt (s) = the step between consecutive frames' sample moments, so a feed shader can advance its own sim on the same clock as the played-back uniforms.
+
+## 2026-10-24 — IDEA (user, not decided, nothing built): per-shader control notification
+User: "couldn't ShaderEditor optionally show a persistent notification for shaders like the phone ringbox, with buttons
+like the orbit modes or a brain reset?" Proposal (mine, awaiting OK): shader opts in by directive, e.g.
+`#define NOTIFY_BUTTON <id> "<label>"` (repeatable; ongoing notification only while that shader is the live wallpaper).
+A press = a counter per button: exposed to the shader as a uniform AND written into the SIM FEED return file
+(ringbox.in.bin, next to the boop/3-finger counters), so the brain handles it like a pad press. Custom RemoteViews
+layout to fit more than Android's 3 action buttons. Ringbox candidates: sys_mode cycle (normal/slingshot/recover),
+STAR SLING, ROSETTE, REFILL, cam cycle, ring farming on/off, RESET (brain re-execs = new world id = fresh ring).
+
+## 2026-10-24 — DECIDED (user: "that's perfect"): control notification, build it
+As proposed above, with: ONE mode button cycling normal / slingshot / recover / ROSETTE (rosette is a mode like
+slingshot); NO camera button (3-finger taps already cycle cams); STAR SLING, REFILL, ring farming on/off, RESET; status
+line written back by the brain shown as the notification text.
+
+## 2026-10-24 ~18:35 — v116 BUILT + installed (uncommitted, user to try): CONTROL NOTIFICATION
+`#define BUTTON_<id> <label>` (source order, max 8; label = rest of the line, no trailing comment) -> ongoing silent
+notification (channel "Shader controls", public on the lock screen) while that shader is the live wallpaper; one row of
+buttons, expanded view adds the status body. Press = counter (service/ShaderControls): uniform int u_btn_<id> in every
+pass + return-file header bytes 32..63 (u32 per button) for FEED brains. Status: ~/.shader/feeds/<feed>.status, line 1 =
+header subtext, rest = expanded text, re-read every 1 s while visible (and 0.4 s after a press).
+
+## 2026-10-26 — v119: the CONTROL NOTIFICATION joins the crDroid island
+setProgress(100, first "NN %" of the status header, else 100) + the header as title: an ONGOING notification with a
+progress value is promoted by the dynamic bar (axdynamicbar NotificationIslandManager), which draws this notification's
+own button layout when the pill is opened (ExpandedOngoingContent.kt). Seen live: pill "normal · ri… 94%".
+Committed together with the uncommitted v116-v118 work that was already installed (control notification, feed bits).

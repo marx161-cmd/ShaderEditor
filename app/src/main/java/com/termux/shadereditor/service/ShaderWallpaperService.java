@@ -87,6 +87,7 @@ public class ShaderWallpaperService extends WallpaperService {
 		@Override
 		public void onDestroy() {
 			super.onDestroy();
+			ShaderControls.hide(ShaderWallpaperService.this);   // CONTROL NOTIFICATION (v116)
 			// Unregister listener to prevent memory leaks.
 			ShaderEditorApp.preferences.getSharedPreferences()
 					.unregisterOnSharedPreferenceChangeListener(this);
@@ -101,6 +102,9 @@ public class ShaderWallpaperService extends WallpaperService {
 			super.onVisibilityChanged(visible);
 			if (!visible) {
 				BeatClock.tapOff();   // screen off / app switch: the tap tempo is off (scope.md 2026-10-19)
+			}
+			if (!isPreview()) {
+				ShaderControls.setVisible(visible);
 			}
 			if (view == null) {
 				return;
@@ -156,6 +160,9 @@ public class ShaderWallpaperService extends WallpaperService {
 				view.setFpsCap(ShaderView.parseFpsCap(src));
 				view.setKeepState(ShaderView.parseKeepState(src));
 				view.setFeed(src);
+				if (!isPreview()) {
+					ShaderControls.update(ShaderWallpaperService.this, src);   // BUTTON_ lines (v116)
+				}
 			}
 		}
 

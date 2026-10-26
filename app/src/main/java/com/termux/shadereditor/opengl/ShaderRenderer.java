@@ -347,6 +347,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			return;
 		}
 
+		applyButtons(frame.bindings());
 		renderPipeline.renderMainPass(frame.bindings().get(0), mainProgram);
 		renderPipeline.renderSurfacePass(
 				surfaceBindings,
@@ -403,6 +404,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			}
 		}
 
+		applyButtons(frame.bindings());
 		SimFeed feed = simFeed;
 		if (feed != null) {
 			feed.apply(frame.bindings(), presentNs > 0 ? presentNs : frame.now());
@@ -422,6 +424,17 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		}
 
 		builtinUniforms.endFrame();
+	}
+
+	// CONTROL NOTIFICATION (v116): "uniform int u_btn_<id>" = presses of that button so far.
+	private static void applyButtons(List<ProgramBindings> bindings) {
+		String[] names = com.termux.shadereditor.service.ShaderControls.uniformNames();
+		for (int i = 0; i < names.length; ++i) {
+			int n = com.termux.shadereditor.service.ShaderControls.count(i);
+			for (ProgramBindings pb : bindings) {
+				pb.setInt(names[i], n);
+			}
+		}
 	}
 
 	public void unregisterListeners() {
