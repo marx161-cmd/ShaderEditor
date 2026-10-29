@@ -689,3 +689,12 @@ notification_controls.xml: two rows of four 44 dp buttons (style IslandButton: 1
 the second row only with > 4 buttons; was one 40 dp row of eight. The layout file was never committed with v116-v119;
 it is now. Still max 8 buttons (the feed's 8 counter slots). Installed via blazer-sysapp-update; the install reset the
 wallpaper to ImageWallpaper -> RELOAD_WALLPAPER broadcast put ShaderEditor back.
+
+## 2026-10-29 04:22 — v121: TAP ONSETS -- every finger landing is a beat hit for the flywheel (user)
+User: "let my taps both drive the flywheel tempo just like the music and also act as accents, like beat hits"; keep the beat
+maps (user agreed: a map is exact, taps cannot improve it). BeatClock.processTaps: every ACTION_DOWN / ACTION_POINTER_DOWN ->
+BeatTracker.addOnset(TAP_ONSET 1.0) = the newest onset sample + 1.0 x the loudest recent onset, so the tempo autocorrelation
+and phase comb hear taps like kicks. No reference (live audio / unmapped / silence) -> audio + taps steer the flywheel;
+a map reference (or the hold + 4-tap override) -> the ODF is not used for tempo, taps are only the shaders' accents.
+The hold + 4-tap tempo gesture is unchanged. Installed via blazer-sysapp-update; wallpaper restored by SET_WALLPAPER.
+Shader side (shader-backdrop): the ember box now also kicks on every landing (the worms already did).

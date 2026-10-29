@@ -99,6 +99,8 @@ public final class BeatClock {
 	private static final int TAP_MIN = 4;
 	private static final double TAP_TOL = 0.15;
 	private static final long TAP_UP_MAX_NS = 350_000_000L;
+	// v121: every finger landing is an onset in the tracker (x the loudest recent onset); see BeatTracker.addOnset
+	private static final double TAP_ONSET = 1.0;
 	private static final int EV_OFF = -1;
 
 	/** Immutable snapshot for the render thread. */
@@ -486,6 +488,9 @@ public final class BeatClock {
 			int pointers = (int) ev[1];
 			int id = (int) ev[2];
 			long t = ev[3];
+			if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+				tracker.addOnset(TAP_ONSET);              // v121: the landing is a beat hit for the flywheel too
+			}
 			switch (action) {
 				case EV_OFF:
 					gestureLive = false;

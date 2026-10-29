@@ -114,6 +114,25 @@ final class BeatTracker {
 		count = mod(count + dt * (rate + corr), BEAT_WRAP);
 	}
 
+	/**
+	 * v121 TAP ONSETS (user 2026-10-29: "let my taps drive the flywheel tempo just like the music"): a finger landing is
+	 * added to the newest onset sample as loud as the loudest recent onset (x strength), so the tempo autocorrelation and
+	 * the phase comb hear it like a kick. Without a reference (live audio / silence) the taps steer with the audio; with a
+	 * map reference the ODF is not used for tempo, so there they are only the shaders' accents.
+	 */
+	void addOnset(double strength) {
+		if (filled == 0) {
+			return;
+		}
+		int i = (odfHead - 1 + len) % len;
+		double v = strength * Math.max(scale, 0.05);
+		odf[i] += v;
+		lastOdf = odf[i];
+		if (odf[i] > scale) {
+			scale = odf[i];
+		}
+	}
+
 	void setReference(double phase, double tbeat) {
 		hasRef = true;
 		refPhase = mod(phase, 1.0);
