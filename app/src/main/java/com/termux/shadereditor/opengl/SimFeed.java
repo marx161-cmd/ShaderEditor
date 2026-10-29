@@ -1,5 +1,7 @@
 package com.termux.shadereditor.opengl;
 
+import android.content.Context;
+import android.content.Intent;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.util.Log;
@@ -8,6 +10,7 @@ import android.view.MotionEvent;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.termux.shadereditor.app.ShaderEditorApp;
 import com.termux.shadereditor.service.ShaderControls;
 
 import java.io.File;
@@ -62,6 +65,10 @@ final class SimFeed {
 	// of history so a burst always finds its bracketing pair.
 	private static final double DELAY_S = 0.120;
 	private static final int HIST = 12;
+	// PRODUCER WAKE-UP (v122): visible but no new feed step for STALE_NS -> Cybersyn external_trigger
+	// "feed_<name>" (its profile starts the producer in Termux), at most once per WAKE_EVERY_NS.
+	private static final long STALE_NS = 3_000_000_000L;
+	private static final long WAKE_EVERY_NS = 15_000_000_000L;
 
 	@NonNull
 	private final String name;
@@ -99,6 +106,8 @@ final class SimFeed {
 	private float canvasW;
 	private float canvasH;
 	private volatile boolean visible;
+	private volatile long progressNs;      // last new feed step, or the moment the wallpaper became visible
+	private long lastWakeNs;
 	private int frame;
 
 	// touches (main thread writes, GL thread reads)
@@ -147,6 +156,9 @@ final class SimFeed {
 	}
 
 	void setVisible(boolean v) {
+		if (v && !visible) {
+			progressNs = System.nanoTime();   // grace: a paused brain resumes on the next heartbeat
+		}
 		visible = v;
 		if (!v) {
 			writeHeader(System.nanoTime());   // the brain pauses at once, not after the stale timeout
@@ -223,7 +235,9 @@ final class SimFeed {
 
 	// ---- per frame (GL thread) ----
 	void apply(@NonNull List<ProgramBindings> bindings, long nowNs) {
-		if (!readFeed(nowNs) || count == 0 || histN == 0) {
+		boolean fed = readFeed(nowNs);
+		wakeProducer(nowNs);
+		if (!fed || count == 0 || histN == 0) {
 			return;
 		}
 		double ts = nowNs / 1e9 - DELAY_S;
@@ -297,6 +311,32 @@ final class SimFeed {
 		}
 	}
 
+	private void wakeProducer(long nowNs) {
+		if (!visible) {
+			return;
+		}
+		if (progressNs == 0) {
+			progressNs = nowNs;
+		}
+		if (nowNs - progressNs < STALE_NS || (lastWakeNs != 0 && nowNs - lastWakeNs < WAKE_EVERY_NS)) {
+			return;
+		}
+		lastWakeNs = nowNs;
+		Context ctx = ShaderEditorApp.appContext;
+		if (ctx == null) {
+			return;
+		}
+		Log.i(TAG, "feed " + name + " stale " + (nowNs - progressNs) / 1_000_000 + " ms -> Cybersyn trigger feed_" + name);
+		try {
+			ctx.sendBroadcast(new Intent("com.termux.cybersyn.action.EXTERNAL_TRIGGER")
+					.setPackage("com.termux.cybersyn")
+					.putExtra("com.termux.cybersyn.extra.TRIGGER_NAME", "feed_" + name)
+					.putExtra("com.termux.cybersyn.extra.SOURCE", "shadereditor"));
+		} catch (RuntimeException e) {
+			Log.w(TAG, "producer wake-up failed", e);
+		}
+	}
+
 	private boolean readFeed(long nowNs) {
 		if (feed == null) {
 			if (nowNs < nextTry) {
@@ -353,6 +393,7 @@ final class SimFeed {
 		tPrev = tp;
 		tCur = tc;
 		lastSeq = seq1;
+		progressNs = nowNs;
 		if (histN == 0) {                        // seed with the file's previous snapshot too
 			push(tp, prev, null);
 		}

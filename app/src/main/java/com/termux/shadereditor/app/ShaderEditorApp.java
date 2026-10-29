@@ -22,9 +22,13 @@ public class ShaderEditorApp extends Application {
 	private static final BatteryLevelReceiver batteryLevelReceiver = new BatteryLevelReceiver();
 	private static final ScreenLockReceiver screenLockReceiver = new ScreenLockReceiver();
 
+	/** v122: for code without its own Context (SimFeed's producer wake-up broadcast). */
+	public static Context appContext;
+
 	@Override
 	public void onCreate() {
 		super.onCreate();
+		appContext = getApplicationContext();
 
 		if (BuildConfig.DEBUG) {
 			StrictMode.setThreadPolicy(
