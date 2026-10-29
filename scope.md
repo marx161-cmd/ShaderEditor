@@ -698,3 +698,13 @@ and phase comb hear taps like kicks. No reference (live audio / unmapped / silen
 a map reference (or the hold + 4-tap override) -> the ODF is not used for tempo, taps are only the shaders' accents.
 The hold + 4-tap tempo gesture is unchanged. Installed via blazer-sysapp-update; wallpaper restored by SET_WALLPAPER.
 Shader side (shader-backdrop): the ember box now also kicks on every landing (the worms already did).
+
+## 2026-10-30 — Termux backdrop rendered by ShaderEditor (BackdropService) — decided with the user
+User: "shader_105 ... much darker as backdrop", "no freezing, let the chirp backdrop pulse to audio".
+Architecture (mine, flagged to the user): ShaderEditor gains a bound `BackdropService`; Termux (same UID 1000)
+binds it and passes a `Surface` from a `TextureView` behind the terminal text; ShaderEditor renders into it with
+its normal `ShaderView` (same `getHolder()` override trick as the wallpaper engine), so multipass/`==spark==`
+feedback, JDSP audio uniforms, FPS_CAP etc. come for free — no second renderer in Termux.
+- Shader file `~/shaders/termux/backdrop.glsl` (Termux home), hot reload by mtime (<=1 s).
+- Termux config `~/.termux/backdrop.properties`: `enabled`, `shader`, `dim` (TextureView alpha over black),
+  `quality` (render scale). Runs only between Termux onStart/onStop; no idle freeze.
