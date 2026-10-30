@@ -1,6 +1,7 @@
 package com.termux.shadereditor.opengl;
 
 import com.termux.shadereditor.beat.BeatClock;
+import com.termux.shadereditor.beat.KnockDetector;
 import com.termux.shadereditor.beat.MusicState;
 
 import android.app.Activity;
@@ -142,6 +143,7 @@ final class BuiltinSystemUniforms {
 	private static final float SHAPE_EXP = 3.0f;          // renderer.py SHAPE_EXP (bass accum)
 	// Shared beat clock, held only while a shader uses a beat uniform.
 	private boolean hasBeat;
+	private boolean hasKnock;   // v124: uniform float knockCount
 	// u_ms_* (beat/MusicState.java, same names + meanings as shader-backdrop music_state.py)
 	private static final String[] MUSIC_UNIFORMS = {"u_ms_source", "u_ms_cur_a", "u_ms_cur_b",
 			"u_ms_sec_a", "u_ms_sec_b", "u_ms_next_a", "u_ms_next_b", "u_ms_change",
@@ -246,6 +248,7 @@ final class BuiltinSystemUniforms {
 			hasMusic |= anyHasUniform(device, programs, name);
 		}
 		hasBeat |= hasMusic;
+		hasKnock = anyHasUniform(device, programs, "knockCount");
 		if (hasBeat && beatClock == null) {
 			beatClock = BeatClock.acquire(context);
 		} else if (!hasBeat && beatClock != null) {
@@ -313,6 +316,9 @@ final class BuiltinSystemUniforms {
 				bindings.setFloat("u_ms_repeat", m.repeat);
 				bindings.setFloat("u_ms_song_pos", m.songPos);
 			}
+		}
+		if (hasKnock) {
+			bindings.setFloat("knockCount", (float) KnockDetector.count());
 		}
 		if (hasNightMode) {
 			bindings.setInt(ShaderRenderer.UNIFORM_NIGHT_MODE, nightMode);

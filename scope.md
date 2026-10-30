@@ -708,3 +708,19 @@ feedback, JDSP audio uniforms, FPS_CAP etc. come for free — no second renderer
 - Shader file `~/shaders/termux/backdrop.glsl` (Termux home), hot reload by mtime (<=1 s).
 - Termux config `~/.termux/backdrop.properties`: `enabled`, `shader`, `dim` (TextureView alpha over black),
   `quality` (render scale). Runs only between Termux onStart/onStop; no idle freeze.
+
+## 2026-10-30 — v124: BODY KNOCKS -- taps on the phone's body are rhythm taps (user)
+User: rhythm taps "off the screen"; Quick Tap does not fire on side taps; "as long as we detect any of the non screen taps
+it doesn't matter" (no left/right/back split). beat/KnockDetector: accelerometer at SENSOR_DELAY_FASTEST while the
+wallpaper is visible (and a BeatClock user exists); a knock = a sharp jerk spike over an adaptive noise floor, refractory
+between knocks, voided when a screen touch lands within a short window around it (the screen tap's own jolt). Each knock =
+BeatTracker.addOnset like a finger landing (back-dated by the confirmation delay) + uniform `float knockCount` (+1 per
+knock; shaders compare to their stored copy). Logcat tag Knock prints every candidate's peak for tuning.
+- same day, user: "since we still know it's side taps, isn't it smart to make it expect motion related to side taps?" --
+  yes: a knock is accepted only when the jolt is mostly IN THE SCREEN PLANE (x / y, PLANE_MIN 0.70); screen taps, back
+  taps and setting the phone down jolt along z and are dropped by that test (the touch window stays as a second guard).
+
+## 2026-10-30 — v125: screen taps are triggers, side knocks are the rhythm (user)
+User: "screen taps aren't rhythm anymore, they're for triggering stuff, side taps rhythm, beat clock lock stays 2 finger
+bound". BeatClock.processTaps no longer adds a flywheel onset per finger landing (v121 reverted); body knocks (v124) stay
+onsets; the hold + 4-tap tempo lock is unchanged.

@@ -99,9 +99,10 @@ public final class BeatClock {
 	private static final int TAP_MIN = 4;
 	private static final double TAP_TOL = 0.15;
 	private static final long TAP_UP_MAX_NS = 350_000_000L;
-	// v121: every finger landing is an onset in the tracker (x the loudest recent onset); see BeatTracker.addOnset
+	// v121..v124: every finger landing was an onset; v125: only body knocks are (x the loudest recent onset); see BeatTracker.addOnset
 	private static final double TAP_ONSET = 1.0;
 	private static final int EV_OFF = -1;
+	private static final int EV_KNOCK = -2;   // v124: a body knock (KnockDetector), t = when it hit
 
 	/** Immutable snapshot for the render thread. */
 	public static final class State {
@@ -186,6 +187,14 @@ public final class BeatClock {
 		BeatClock c = instance;
 		if (c != null && c.running) {
 			c.tapQueue.add(new long[]{EV_OFF, 0, 0, 0});
+		}
+	}
+
+	/** v124: a knock on the phone's body (KnockDetector, System.nanoTime of the hit); any thread. */
+	static void knock(long nanos) {
+		BeatClock c = instance;
+		if (c != null && c.running) {
+			c.tapQueue.add(new long[]{EV_KNOCK, 0, 0, nanos});
 		}
 	}
 
@@ -488,9 +497,12 @@ public final class BeatClock {
 			int pointers = (int) ev[1];
 			int id = (int) ev[2];
 			long t = ev[3];
-			if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
-				tracker.addOnset(TAP_ONSET);              // v121: the landing is a beat hit for the flywheel too
+			if (action == EV_KNOCK) {                 // v124: a body knock = a rhythm tap (onset only, no gesture)
+				tracker.addOnset(TAP_ONSET, (now - t) / 1e9);
+				continue;
 			}
+			// v125 (user 2026-10-30: "screen taps aren't rhythm anymore, they're for triggering stuff, side taps rhythm"):
+			// finger landings are no longer flywheel onsets (v121) -- only body knocks (EV_KNOCK) are; hold + tap stays the lock.
 			switch (action) {
 				case EV_OFF:
 					gestureLive = false;

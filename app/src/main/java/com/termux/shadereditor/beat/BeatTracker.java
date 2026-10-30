@@ -121,13 +121,21 @@ final class BeatTracker {
 	 * map reference the ODF is not used for tempo, so there they are only the shaders' accents.
 	 */
 	void addOnset(double strength) {
+		addOnset(strength, 0.0);
+	}
+
+	/** v124: the onset happened {@code agoS} seconds ago (a knock is confirmed ~45 ms after it hit). */
+	void addOnset(double strength, double agoS) {
 		if (filled == 0) {
 			return;
 		}
-		int i = (odfHead - 1 + len) % len;
+		int back = (int) Math.min(Math.max(Math.round(agoS * rateHz), 0), filled - 1);
+		int i = (odfHead - 1 - back + 2 * len) % len;
 		double v = strength * Math.max(scale, 0.05);
 		odf[i] += v;
-		lastOdf = odf[i];
+		if (back == 0) {
+			lastOdf = odf[i];
+		}
 		if (odf[i] > scale) {
 			scale = odf[i];
 		}

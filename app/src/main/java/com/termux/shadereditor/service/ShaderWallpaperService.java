@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 
 import com.termux.shadereditor.app.ShaderEditorApp;
 import com.termux.shadereditor.beat.BeatClock;
+import com.termux.shadereditor.beat.KnockDetector;
 import com.termux.shadereditor.database.DataRecords;
 import com.termux.shadereditor.database.DataSource;
 import com.termux.shadereditor.database.Database;
@@ -105,6 +106,7 @@ public class ShaderWallpaperService extends WallpaperService {
 			}
 			if (!isPreview()) {
 				ShaderControls.setVisible(visible);
+				KnockDetector.setVisible(ShaderWallpaperService.this, visible);   // v124 body knocks
 			}
 			if (view == null) {
 				return;

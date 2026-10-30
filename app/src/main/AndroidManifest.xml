@@ -8,6 +8,7 @@
 		android:xlargeScreens="true"/>
 	<!-- Camera textures are only supported from API > 14 -->
 	<uses-permission android:name="android.permission.CAMERA"/>
+	<uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
 	<!-- CONTROL NOTIFICATION (v116); UID 1000 has it anyway -->
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 	<uses-permission android:name="android.permission.RECORD_AUDIO"/>

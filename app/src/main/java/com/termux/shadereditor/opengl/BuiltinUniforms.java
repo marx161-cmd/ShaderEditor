@@ -3,6 +3,7 @@ package com.termux.shadereditor.opengl;
 import android.os.SystemClock;
 
 import com.termux.shadereditor.beat.BeatClock;
+import com.termux.shadereditor.beat.KnockDetector;
 
 import android.content.Context;
 import android.view.MotionEvent;
@@ -152,6 +153,13 @@ final class BuiltinUniforms {
 		BeatClock.touch(e.getActionMasked(), e.getPointerCount(),
 				e.getPointerId(e.getActionIndex()),
 				System.nanoTime() - (SystemClock.uptimeMillis() - e.getEventTime()) * 1_000_000L);
+
+		if (e.getActionMasked() == MotionEvent.ACTION_DOWN
+				|| e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+			// v124: a screen tap jolts the phone too -- the knock detector ignores jolts around it
+			KnockDetector.touchDown(System.nanoTime()
+					- (SystemClock.uptimeMillis() - e.getEventTime()) * 1_000_000L);
+		}
 
 		switch (e.getActionMasked()) {
 			case MotionEvent.ACTION_DOWN:
