@@ -2,6 +2,10 @@ package com.termux.shadereditor.opengl;
 
 import android.content.Context;
 import android.content.Intent;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.util.Log;
@@ -48,12 +52,16 @@ final class SimFeed {
 	// RETURN FILE v2 (v117): the touch block gained the 3-finger tap's position (the brain zones taps by screen half)
 	// and a GESTURE block carries the live pointers, so the brain can fly the camera from swipes/pinch/twist.
 	// v1 = boops/boop xy/3-finger count (16 bytes). v2 = 24 + 44 bytes, blob table after both.
-	private static final int IN_VERSION = 2;
+	// v3 (v126, 2026-11-03 GYRO FLIGHT, phone-ringbox scope.md): a SENSOR block after the gesture block -- gravity +
+	// gyro rate every frame while the brain asks for them (feed record "u_flySensors" > 0.5) and the wallpaper is visible.
+	private static final int IN_VERSION = 3;
 	private static final int TOUCH_OFF = HDR;                 // v2: 24 bytes
 	private static final int TOUCH_LEN = 24;
 	private static final int GEST_OFF = HDR + TOUCH_LEN;      // v2: 44 bytes (count, moved, seq, 4 x (x, y))
 	private static final int GEST_LEN = 44;
-	private static final int BLOB_OFF = GEST_OFF + GEST_LEN;
+	private static final int SENS_OFF = GEST_OFF + GEST_LEN;  // v3: 32 bytes (on, sample count, gravity xyz, gyro xyz)
+	private static final int SENS_LEN = 32;
+	private static final int BLOB_OFF = SENS_OFF + SENS_LEN;
 	private static final int EXPORT_EVERY = 6;
 	private static final long TAP_MAX_NS = 250_000_000L;
 	private static final float TAP_SLOP_PX = 40f;
@@ -129,6 +137,28 @@ final class SimFeed {
 	private volatile int gestMoved;
 	private volatile int gestSeq;
 
+	// v126 flight sensors (sensor thread writes, GL thread reads); registered only while wanted
+	private final float[] grav = new float[3];
+	private final float[] gyro = new float[3];
+	private volatile int sensN;
+	private int flyIdx = -1;               // index of the "u_flySensors" record, -1 = none
+	private boolean sensOn;
+	private SensorManager sensorManager;
+	private final SensorEventListener sensListener = new SensorEventListener() {
+		@Override
+		public void onSensorChanged(SensorEvent e) {
+			float[] dst = e.sensor.getType() == Sensor.TYPE_GRAVITY ? grav : gyro;
+			dst[0] = e.values[0];
+			dst[1] = e.values[1];
+			dst[2] = e.values[2];
+			++sensN;
+		}
+
+		@Override
+		public void onAccuracyChanged(Sensor sensor, int accuracy) {
+		}
+	};
+
 	// export readback
 	private GlFramebuffer fbo;
 	private int[] pbos;
@@ -155,12 +185,40 @@ final class SimFeed {
 		canvasH = height;
 	}
 
+	private void setSensors(boolean on) {
+		if (on == sensOn) {
+			return;
+		}
+		if (sensorManager == null) {
+			sensorManager = (SensorManager) ShaderEditorApp.appContext.getSystemService(Context.SENSOR_SERVICE);
+			if (sensorManager == null) {
+				return;
+			}
+		}
+		sensOn = on;
+		if (on) {
+			Sensor g = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY);
+			Sensor w = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+			if (g != null) {
+				sensorManager.registerListener(sensListener, g, SensorManager.SENSOR_DELAY_GAME);
+			}
+			if (w != null) {
+				sensorManager.registerListener(sensListener, w, SensorManager.SENSOR_DELAY_GAME);
+			}
+			Log.i(TAG, "flight sensors ON");
+		} else {
+			sensorManager.unregisterListener(sensListener);
+			Log.i(TAG, "flight sensors OFF");
+		}
+	}
+
 	void setVisible(boolean v) {
 		if (v && !visible) {
 			progressNs = System.nanoTime();   // grace: a paused brain resumes on the next heartbeat
 		}
 		visible = v;
 		if (!v) {
+			setSensors(false);                // never keep the sensors running behind another app
 			writeHeader(System.nanoTime());   // the brain pauses at once, not after the stale timeout
 		}
 	}
@@ -237,6 +295,7 @@ final class SimFeed {
 	void apply(@NonNull List<ProgramBindings> bindings, long nowNs) {
 		boolean fed = readFeed(nowNs);
 		wakeProducer(nowNs);
+		setSensors(visible && fed && flyIdx >= 0 && flyIdx < count && cur[flyIdx][0] > 0.5f);
 		if (!fed || count == 0 || histN == 0) {
 			return;
 		}
@@ -375,6 +434,12 @@ final class SimFeed {
 				names[i] = nm;
 				histN = 0;                           // the record layout changed: old snapshots don't apply
 			}
+			if (i == 0) {
+				flyIdx = -1;
+			}
+			if ("u_flySensors".equals(nm)) {
+				flyIdx = i;
+			}
 			kinds[i] = recBytes[o + 32];
 			comps[i] = Math.max(1, Math.min(4, recBytes[o + 33]));
 			interp[i] = recBytes[o + 34] != 0;
@@ -474,6 +539,12 @@ final class SimFeed {
 			m.putFloat(GEST_OFF + 12 + 8 * i, ptrX[i]);
 			m.putFloat(GEST_OFF + 16 + 8 * i, ptrY[i]);
 		}
+		m.putInt(SENS_OFF, sensOn ? 1 : 0);      // v3: flight sensors (zeros while off)
+		m.putInt(SENS_OFF + 4, sensN);
+		for (int i = 0; i < 3; ++i) {
+			m.putFloat(SENS_OFF + 8 + 4 * i, sensOn ? grav[i] : 0f);
+			m.putFloat(SENS_OFF + 20 + 4 * i, sensOn ? gyro[i] : 0f);
+		}
 		for (int i = 0; i < ShaderControls.MAX; ++i) {   // CONTROL NOTIFICATION presses (v116), header 32..63
 			m.putInt(32 + 4 * i, ShaderControls.count(i));
 		}
@@ -525,6 +596,7 @@ final class SimFeed {
 
 	/** GL objects die with the context: forget them (fresh context) or delete them (live context). */
 	void releaseGl(@Nullable GlDevice device) {
+		setSensors(false);
 		if (pbos != null && device != null) {
 			GLES30.glDeleteBuffers(pbos.length, pbos, 0);
 			device.deleteFramebuffer(fbo);
