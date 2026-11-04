@@ -724,3 +724,16 @@ knock; shaders compare to their stored copy). Logcat tag Knock prints every cand
 User: "screen taps aren't rhythm anymore, they're for triggering stuff, side taps rhythm, beat clock lock stays 2 finger
 bound". BeatClock.processTaps no longer adds a flywheel onset per finger landing (v121 reverted); body knocks (v124) stay
 onsets; the hold + 4-tap tempo lock is unchanged.
+
+## 2026-11-04 — v127: SAVE STATES for SIM FEED shaders (phone-ringbox) -- written BEFORE the code
+User: save states for the ringbox "on each device" (desktop done in shader-backdrop 1d446d7). The brain asks through two
+feed records, `u_stateSave` / `u_stateLoad` (counters, played back like every record, so a request lands on the frame
+that shows the brain step it was made in: skew <= 1 brain step). Save = every 2D 32-bit image's FRONT copy (RGBA32F,
+R32F, R32UI, R32I; 16-bit/8-bit/3D skipped) read back on the GL thread -> `~/.shader/feeds/<feed>.state/out/<img>.raw`
++ `done.json` (written off the GL thread). Load = `<feed>.state/in/<img>.raw` -> glTexSubImage2D into the front copy,
+same size + format only, then `in/done.json`. Only while visible; a counter that goes BACK = a restarted brain (resync,
+never replay); the first sight of the records syncs without acting (an app restart never replays a request).
+2026-11-04 ~04:30 — v127 BUILT, installed (blazer-sysapp-update), verified live with the ringbox brain: a save reads back
+11 images (den + lit RGBA16F skipped, as designed), the brain keeps gpos/gvel/pk (77 MB); a load uploads them
+("loaded [gpos, gvel, pk], refused []"). Check: per-grain orbit radius after load + re-save matched the saved ring as
+closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at ~0.7 su apart). Wallpaper looked normal.

@@ -632,6 +632,16 @@ final class ShaderRenderPipeline {
 		return set == null ? null : set.textures[set.front];
 	}
 
+	// SAVE STATES (v127): every declared image's current (front) texture, in declaration order.
+	@NonNull
+	Map<String, GlImageTexture> getFrontImages() {
+		Map<String, GlImageTexture> m = new LinkedHashMap<>();
+		for (Map.Entry<String, ImageSet> e : imageSets.entrySet()) {
+			m.put(e.getKey(), e.getValue().textures[e.getValue().front]);
+		}
+		return m;
+	}
+
 	private static final class ImageSet {
 		@NonNull
 		final ComputeImageSpec spec;

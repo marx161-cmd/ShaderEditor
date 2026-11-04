@@ -8,6 +8,7 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
+import android.opengl.GLES31;
 import android.util.Log;
 import android.view.MotionEvent;
 
@@ -18,13 +19,23 @@ import com.termux.shadereditor.app.ShaderEditorApp;
 import com.termux.shadereditor.service.ShaderControls;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * SIM FEED (v113, phone-ringbox scope.md 2026-10-23): uniforms from a Termux process, and data back to it.
@@ -38,6 +49,7 @@ import java.util.List;
  * read back through a PBO every EXPORT_EVERY frames (one export late, never a pipeline stall).</li>
  * </ul>
  * Return header bytes 32..63: CONTROL NOTIFICATION button counters (v116), u32 each in BUTTON_ order.
+ * SAVE STATES (v127): records u_stateSave / u_stateLoad (counters) -> dumpImages / loadImages below.
  * Layouts must match phone-ringbox/brain.py.
  */
 final class SimFeed {
@@ -158,6 +170,22 @@ final class SimFeed {
 		public void onAccuracyChanged(Sensor sensor, int accuracy) {
 		}
 	};
+
+	// SAVE STATES (v127, phone-ringbox scope.md 2026-11-04): the brain bumps u_stateSave / u_stateLoad; the value that
+	// is PLAYED BACK this frame is compared with the last one handled, so a request lands on the frame showing the
+	// brain step it was made in. MIN_VALUE = not synced yet (the first sight never acts: an app restart never replays).
+	private int saveIdx = -1;
+	private int loadIdx = -1;
+	private int saveWant;
+	private int loadWant;
+	private int saveDone = Integer.MIN_VALUE;
+	private int loadDone = Integer.MIN_VALUE;
+	private GlFramebuffer stateFbo;
+	private static final ExecutorService STATE_IO = Executors.newSingleThreadExecutor(r -> {
+		Thread t = new Thread(r, "SimFeedState");
+		t.setDaemon(true);
+		return t;
+	});
 
 	// export readback
 	private GlFramebuffer fbo;
@@ -354,6 +382,12 @@ final class SimFeed {
 		for (ProgramBindings pb : bindings) {
 			pb.setFloat("u_feedDt", feedDt);
 		}
+		if (saveIdx >= 0 && saveIdx < count) {
+			saveWant = Math.round(out[saveIdx][0]);
+		}
+		if (loadIdx >= 0 && loadIdx < count) {
+			loadWant = Math.round(out[loadIdx][0]);
+		}
 	}
 
 	private void set(@NonNull ProgramBindings b, int i, @NonNull float[] o) {
@@ -436,9 +470,17 @@ final class SimFeed {
 			}
 			if (i == 0) {
 				flyIdx = -1;
+				saveIdx = -1;
+				loadIdx = -1;
 			}
 			if ("u_flySensors".equals(nm)) {
 				flyIdx = i;
+			}
+			if ("u_stateSave".equals(nm)) {
+				saveIdx = i;
+			}
+			if ("u_stateLoad".equals(nm)) {
+				loadIdx = i;
 			}
 			kinds[i] = recBytes[o + 32];
 			comps[i] = Math.max(1, Math.min(4, recBytes[o + 33]));
@@ -487,6 +529,221 @@ final class SimFeed {
 			exportImages(pipeline, device);
 		}
 		writeHeader(nowNs);
+		stateRequests(pipeline, device);
+	}
+
+	private void stateRequests(@NonNull ShaderRenderPipeline pipeline, @NonNull GlDevice device) {
+		if (saveIdx < 0 && loadIdx < 0) {
+			return;
+		}
+		if (saveDone == Integer.MIN_VALUE) {     // first sight: sync, never act
+			saveDone = saveWant;
+			loadDone = loadWant;
+			return;
+		}
+		if (saveWant < saveDone) {               // a counter that went back = a restarted brain: resync
+			saveDone = saveWant;
+		}
+		if (loadWant < loadDone) {
+			loadDone = loadWant;
+		}
+		if (!visible) {
+			return;
+		}
+		if (saveWant > saveDone) {
+			saveDone = saveWant;
+			dumpImages(pipeline, device, saveWant);
+		}
+		if (loadWant > loadDone) {
+			loadDone = loadWant;
+			loadImages(pipeline, device, loadWant);
+		}
+	}
+
+	private static boolean savable(@NonNull ComputeImageSpec.Format f) {
+		return f == ComputeImageSpec.Format.RGBA32F || f == ComputeImageSpec.Format.R32F ||
+				f == ComputeImageSpec.Format.R32UI || f == ComputeImageSpec.Format.R32I;
+	}
+
+	/** Save: every 2D 32-bit image's front copy, read back here (GL thread), written to state/out by STATE_IO. */
+	private void dumpImages(@NonNull ShaderRenderPipeline pipeline, @NonNull GlDevice device, int seq) {
+		File dir = new File(DIR, name + ".state/out");
+		List<Object[]> got = new ArrayList<>();
+		List<String> skipped = new ArrayList<>();
+		if (stateFbo == null) {
+			stateFbo = device.createFramebuffer();
+		}
+		GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS);
+		GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+		device.bindFramebuffer(stateFbo);
+		for (Map.Entry<String, GlImageTexture> e : pipeline.getFrontImages().entrySet()) {
+			String n = e.getKey();
+			GlImageTexture t = e.getValue();
+			ComputeImageSpec.Format f = t.getFormat();
+			if (t.is3D() || !savable(f)) {
+				skipped.add(n + " (" + f + (t.is3D() ? " 3D" : "") + ")");
+				continue;
+			}
+			int w = t.getWidth(), h = t.getHeight(), texels = w * h;
+			GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+					GLES20.GL_TEXTURE_2D, t.getId(), 0);
+			int st = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+			if (st != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+				skipped.add(n + " (framebuffer 0x" + Integer.toHexString(st) + ")");
+				continue;
+			}
+			ByteBuffer rb = ByteBuffer.allocateDirect(texels * 16).order(ByteOrder.LITTLE_ENDIAN);
+			boolean isFloat = f == ComputeImageSpec.Format.RGBA32F || f == ComputeImageSpec.Format.R32F;
+			// the always-legal read formats: RGBA / FLOAT for float buffers, RGBA_INTEGER for integer ones
+			GLES30.glReadPixels(0, 0, w, h, isFloat ? GLES30.GL_RGBA : GLES30.GL_RGBA_INTEGER,
+					isFloat ? GLES20.GL_FLOAT : (f == ComputeImageSpec.Format.R32I ? GLES20.GL_INT
+							: GLES20.GL_UNSIGNED_INT), rb);
+			int err = GLES20.glGetError();
+			if (err != GLES20.GL_NO_ERROR) {
+				skipped.add(n + " (read error 0x" + Integer.toHexString(err) + ")");
+				continue;
+			}
+			ByteBuffer nat = rb;
+			if (f != ComputeImageSpec.Format.RGBA32F) {   // one channel: keep the red one = the native layout
+				nat = ByteBuffer.allocateDirect(texels * 4).order(ByteOrder.LITTLE_ENDIAN);
+				for (int k = 0; k < texels; ++k) {
+					nat.putInt(rb.getInt(16 * k));
+				}
+			}
+			nat.position(0);
+			got.add(new Object[]{n, w, h, f.name(), nat});
+		}
+		GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+				GLES20.GL_TEXTURE_2D, 0, 0);
+		device.bindFramebuffer(null);
+		Log.i(TAG, "state save " + seq + ": " + got.size() + " images read back, skipped " + skipped);
+		STATE_IO.execute(() -> writeDump(dir, seq, got, skipped));
+	}
+
+	private static void writeDump(@NonNull File dir, int seq, @NonNull List<Object[]> got,
+			@NonNull List<String> skipped) {
+		JSONObject j = new JSONObject();
+		try {
+			j.put("seq", seq);
+			dir.mkdirs();
+			File[] old = dir.listFiles();
+			if (old != null) {
+				for (File f : old) {
+					//noinspection ResultOfMethodCallIgnored
+					f.delete();
+				}
+			}
+			JSONObject im = new JSONObject();
+			for (Object[] g : got) {
+				ByteBuffer b = (ByteBuffer) g[4];
+				try (FileOutputStream fo = new FileOutputStream(new File(dir, g[0] + ".raw"));
+						FileChannel ch = fo.getChannel()) {
+					while (b.hasRemaining()) {
+						ch.write(b);
+					}
+				}
+				im.put((String) g[0], new JSONObject().put("w", g[1]).put("h", g[2]).put("format", g[3])
+						.put("bytes", b.capacity()));
+			}
+			j.put("images", im);
+			j.put("skipped", new JSONArray(skipped));
+		} catch (Exception ex) {
+			Log.w(TAG, "state save " + seq + " failed", ex);
+			try {
+				j.put("error", ex.toString());
+			} catch (Exception ignored) {
+			}
+		}
+		writeDone(dir, j);
+	}
+
+	private static void writeDone(@NonNull File dir, @NonNull JSONObject j) {
+		try {
+			dir.mkdirs();
+			File tmp = new File(dir, "done.json.tmp");
+			try (FileOutputStream fo = new FileOutputStream(tmp)) {
+				fo.write(j.toString().getBytes(StandardCharsets.UTF_8));
+			}
+			//noinspection ResultOfMethodCallIgnored
+			tmp.renameTo(new File(dir, "done.json"));
+		} catch (Exception ex) {
+			Log.w(TAG, "state done.json failed", ex);
+		}
+	}
+
+	/** Load: state/in/<image>.raw -> that image's front copy (same size + format only), here on the GL thread. */
+	private void loadImages(@NonNull ShaderRenderPipeline pipeline, @NonNull GlDevice device, int seq) {
+		File dir = new File(DIR, name + ".state/in");
+		JSONObject res = new JSONObject();
+		JSONArray loaded = new JSONArray();
+		JSONArray refused = new JSONArray();
+		try {
+			res.put("seq", seq);
+			byte[] txt;
+			File jf = new File(dir, "images.json");
+			try (FileInputStream fi = new FileInputStream(jf)) {
+				txt = new byte[(int) jf.length()];
+				int o = 0;
+				while (o < txt.length) {
+					int r = fi.read(txt, o, txt.length - o);
+					if (r < 0) {
+						break;
+					}
+					o += r;
+				}
+			}
+			JSONObject im = new JSONObject(new String(txt, StandardCharsets.UTF_8)).getJSONObject("images");
+			Map<String, GlImageTexture> imgs = pipeline.getFrontImages();
+			GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS);
+			GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0);
+			for (Iterator<String> it = im.keys(); it.hasNext(); ) {
+				String n = it.next();
+				JSONObject e = im.getJSONObject(n);
+				GlImageTexture t = imgs.get(n);
+				File rf = new File(dir, n + ".raw");
+				if (t == null || t.is3D() || !savable(t.getFormat())) {
+					refused.put(n + " (no such 2D 32-bit image)");
+					continue;
+				}
+				ComputeImageSpec.Format f = t.getFormat();
+				int w = t.getWidth(), h = t.getHeight(), bytes = w * h * f.bytesPerTexel;
+				if (e.getInt("w") != w || e.getInt("h") != h || !f.name().equals(e.getString("format"))) {
+					refused.put(n + " (saved " + e.getInt("w") + "x" + e.getInt("h") + " " + e.getString("format") +
+							", live " + w + "x" + h + " " + f.name() + ")");
+					continue;
+				}
+				if (rf.length() != bytes) {
+					refused.put(n + " (file " + rf.length() + " bytes, want " + bytes + ")");
+					continue;
+				}
+				ByteBuffer b = ByteBuffer.allocateDirect(bytes).order(ByteOrder.LITTLE_ENDIAN);
+				try (FileInputStream fi = new FileInputStream(rf); FileChannel ch = fi.getChannel()) {
+					while (b.hasRemaining() && ch.read(b) >= 0) {
+						// read it all
+					}
+				}
+				b.position(0);
+				device.bindTexture(0, t);
+				GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, w, h, f.format, f.type, b);
+				int err = GLES20.glGetError();
+				if (err != GLES20.GL_NO_ERROR) {
+					refused.put(n + " (upload error 0x" + Integer.toHexString(err) + ")");
+				} else {
+					loaded.put(n);
+				}
+			}
+			GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS);
+			res.put("loaded", loaded);
+			res.put("refused", refused);
+		} catch (Exception ex) {
+			Log.w(TAG, "state load " + seq + " failed", ex);
+			try {
+				res.put("error", ex.toString());
+			} catch (Exception ignored) {
+			}
+		}
+		Log.i(TAG, "state load " + seq + ": loaded " + loaded + ", refused " + refused);
+		STATE_IO.execute(() -> writeDone(dir, res));
 	}
 
 	private boolean openInbox(@NonNull ShaderRenderPipeline pipeline) {
@@ -601,6 +858,10 @@ final class SimFeed {
 			GLES30.glDeleteBuffers(pbos.length, pbos, 0);
 			device.deleteFramebuffer(fbo);
 		}
+		if (stateFbo != null && device != null) {
+			device.deleteFramebuffer(stateFbo);
+		}
+		stateFbo = null;
 		pbos = null;
 		pending = null;
 		fbo = null;
