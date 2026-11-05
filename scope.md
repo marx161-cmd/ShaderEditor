@@ -752,3 +752,7 @@ closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at
   No line = no tap action. Buttons unchanged.
 - Gradle: packaging dex/jniLibs useLegacyPackaging = false (ROM-ready, standing rule 2026-11-04), so the
   release APK is promoted into the ROM as built. v129 also carries v128 (TOUCH GATE).
+- v130 (same day): on crDroid a tap on the notification BODY only expands / collapses it (the content intent
+  never fires; user: "it just opens and closes the button overview no matter where I tap"). So the remote gets a
+  real button: `#define BUTTON_remote <label>` (with NOTIFY_REMOTE set) opens the pad via PendingIntent.getActivity
+  instead of a press broadcast. The body tap stays wired (harmless where a ROM honours it).

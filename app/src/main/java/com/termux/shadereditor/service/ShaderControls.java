@@ -67,6 +67,7 @@ public final class ShaderControls {
 	// main thread only
 	private static Context appContext;
 	private static String[] labels = new String[0];
+	private static String[] buttonIds = new String[0];   // v130: "#define BUTTON_remote ..." opens NOTIFY_REMOTE
 	private static String feed;
 	private static String remotePad;
 	private static String status = "";
@@ -127,6 +128,7 @@ public final class ShaderControls {
 		}
 		uniforms = names;
 		labels = texts.toArray(new String[0]);
+		buttonIds = ids.toArray(new String[0]);
 		feed = feedName;
 		status = readStatus();
 		if (labels.length == 0) {
@@ -218,11 +220,7 @@ public final class ShaderControls {
 			b.setContentTitle(head);
 		}
 		if (remotePad != null) {                                   // v129: tap = open the shader's remote
-			Intent open = new Intent(Intent.ACTION_MAIN)
-					.setClassName(REMOTE_PKG, REMOTE_ACTIVITY)
-					.putExtra("pad", remotePad)
-					.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-			b.setContentIntent(PendingIntent.getActivity(ctx, 0x5c02, open,
+			b.setContentIntent(PendingIntent.getActivity(ctx, 0x5c02, remoteIntent(),
 					PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
 		}
 		// v119 (2026-10-26, ringbox scope.md): an ONGOING notification with a progress value is promoted into the
@@ -232,6 +230,14 @@ public final class ShaderControls {
 		int pct = pm.find() ? Math.min(100, Integer.parseInt(pm.group(1))) : 100;
 		b.setProgress(100, pct, false);
 		nm.notify(NOTIFICATION_ID, b.build());
+	}
+
+	@NonNull
+	private static Intent remoteIntent() {
+		return new Intent(Intent.ACTION_MAIN)
+				.setClassName(REMOTE_PKG, REMOTE_ACTIVITY)
+				.putExtra("pad", remotePad)
+				.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 	}
 
 	@NonNull
@@ -250,6 +256,13 @@ public final class ShaderControls {
 			}
 			v.setViewVisibility(BUTTON_VIEWS[i], View.VISIBLE);
 			v.setTextViewText(BUTTON_VIEWS[i], labels[i]);
+			if (remotePad != null && i < buttonIds.length && "remote".equals(buttonIds[i])) {
+				// v130 (2026-11-05): crDroid only expands / collapses on a tap on the notification body, so the
+				// remote gets a real button: "#define BUTTON_remote <label>" opens NOTIFY_REMOTE's pad directly
+				v.setOnClickPendingIntent(BUTTON_VIEWS[i], PendingIntent.getActivity(ctx, 0x5c03, remoteIntent(),
+						PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+				continue;
+			}
 			Intent intent = new Intent(ctx, ControlButtonReceiver.class)
 					.putExtra(ControlButtonReceiver.EXTRA_INDEX, i);
 			v.setOnClickPendingIntent(BUTTON_VIEWS[i], PendingIntent.getBroadcast(ctx, i, intent,
