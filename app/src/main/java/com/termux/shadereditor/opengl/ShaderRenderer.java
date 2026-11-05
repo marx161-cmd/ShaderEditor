@@ -449,6 +449,14 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		}
 	}
 
+	/** v128 TOUCH GATE: the launcher's COMMAND_TAP (a tap on empty home space). */
+	public void wallpaperTap(long uptimeNs) {
+		SimFeed f = simFeed;
+		if (f != null) {
+			f.tapConfirmed(uptimeNs);
+		}
+	}
+
 	public void setOffset(float x, float y) {
 		builtinUniforms.updateOffset(x, y);
 	}

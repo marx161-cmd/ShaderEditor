@@ -45,6 +45,14 @@ public final class ShaderControls {
 	private static final Pattern PATTERN_FEED = Pattern.compile(
 			"^#define[ \\t]+FEED[ \\t]+([A-Za-z0-9_.-]+)[ \\t]*$",
 			Pattern.MULTILINE);
+	// v129 (2026-11-05, user: "can clicking the notification also open the remote"): "#define NOTIFY_REMOTE <pad>"
+	// -> tapping the notification body opens that pad in Cybersyn's remote (stub2 RemoteActivity, extra "pad";
+	// the remote itself decides floating vs normal, as when opened by hand). No line = no tap action (as before).
+	private static final Pattern PATTERN_REMOTE = Pattern.compile(
+			"^#define[ \\t]+NOTIFY_REMOTE[ \\t]+([A-Za-z0-9_.-]+)[ \\t]*$",
+			Pattern.MULTILINE);
+	private static final String REMOTE_PKG = "com.termux.cybersyn.stub2";
+	private static final String REMOTE_ACTIVITY = "com.termux.cybersyn.stub2.RemoteActivity";
 	private static final String CHANNEL = "shader_controls";
 	private static final int NOTIFICATION_ID = 0x5c01;
 	private static final long POLL_MS = 1000;
@@ -60,6 +68,7 @@ public final class ShaderControls {
 	private static Context appContext;
 	private static String[] labels = new String[0];
 	private static String feed;
+	private static String remotePad;
 	private static String status = "";
 	private static boolean visible;
 	private static final Runnable poll = ShaderControls::poll;
@@ -107,6 +116,10 @@ public final class ShaderControls {
 			if (f.find()) {
 				feedName = f.group(1);
 			}
+			Matcher r = PATTERN_REMOTE.matcher(src);
+			remotePad = r.find() ? r.group(1) : null;
+		} else {
+			remotePad = null;
 		}
 		String[] names = new String[ids.size()];
 		for (int i = 0; i < names.length; ++i) {
@@ -203,6 +216,14 @@ public final class ShaderControls {
 		if (!head.isEmpty()) {
 			b.setSubText(head);
 			b.setContentTitle(head);
+		}
+		if (remotePad != null) {                                   // v129: tap = open the shader's remote
+			Intent open = new Intent(Intent.ACTION_MAIN)
+					.setClassName(REMOTE_PKG, REMOTE_ACTIVITY)
+					.putExtra("pad", remotePad)
+					.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+			b.setContentIntent(PendingIntent.getActivity(ctx, 0x5c02, open,
+					PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
 		}
 		// v119 (2026-10-26, ringbox scope.md): an ONGOING notification with a progress value is promoted into the
 		// crDroid dynamic-bar ISLAND, which then draws this notification's own button layout when expanded.

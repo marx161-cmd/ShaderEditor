@@ -144,6 +144,9 @@ public class ShaderView extends GLSurfaceView {
 	@Override
 	public boolean onTouchEvent(MotionEvent event) {
 		renderer.touchAt(event);
+		if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+			renderer.wallpaperTap(event.getEventTime() * 1_000_000L);   // v128: in the app a tap needs no launcher
+		}
 		return true;
 	}
 

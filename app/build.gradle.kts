@@ -11,7 +11,7 @@ android {
 		minSdk = 23
 		targetSdk = compileSdk
 
-		versionCode = 127
+		versionCode = 129
 		versionName = "2.36.9"
 
 		vectorDrawables {
@@ -41,6 +41,13 @@ android {
 	}
 	lint {
 		checkReleaseBuilds = false
+	}
+
+	// 2026-11-05 ROM-READY (docs-consolidated/70-crdroid-rom.md standing rule): dex + native libs stored
+	// uncompressed and aligned, so the release APK goes into the ROM's prebuilts as built -- no repack step
+	packaging {
+		dex { useLegacyPackaging = false }
+		jniLibs { useLegacyPackaging = false }
 	}
 
 	buildFeatures {

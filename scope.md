@@ -737,3 +737,18 @@ never replay); the first sight of the records syncs without acting (an app resta
 11 images (den + lit RGBA16F skipped, as designed), the brain keeps gpos/gvel/pk (77 MB); a load uploads them
 ("loaded [gpos, gvel, pk], refused []"). Check: per-grain orbit radius after load + re-save matched the saved ring as
 closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at ~0.7 su apart). Wallpaper looked normal.
+
+## 2026-11-05 v128 TOUCH GATE (user: "I accidentally poke holes into the ring when swiping away apps, and behind transparent apps like MiXplorer the input works too -- add a gate")
+- Android copies touches to the wallpaper from any window that shows it (home, recents, see-through apps).
+- Gate 1: a gesture reaches the shader (touch uniforms + SIM FEED pointers/boops/3-finger taps) only if the HOME
+  launcher (resolved, now Lawnchair) is the top task at ACTION_DOWN (getRunningTasks; system UID). Unknown = open.
+- Gate 2: a one-finger tap is a BOOP only when the launcher also sends WallpaperManager.COMMAND_TAP (a tap on empty
+  home space) within 0.5 s, either order. The in-app ShaderView confirms its own taps.
+
+## 2026-11-05 v129 NOTIFY_REMOTE + ROM-ready packaging
+- User: "can clicking the notification also open the remote". A wallpaper shader may declare
+  `#define NOTIFY_REMOTE <pad>`; tapping the control notification's body then opens that pad in Cybersyn's
+  remote (com.termux.cybersyn.stub2/.RemoteActivity, extra "pad"); the remote decides floating vs normal itself.
+  No line = no tap action. Buttons unchanged.
+- Gradle: packaging dex/jniLibs useLegacyPackaging = false (ROM-ready, standing rule 2026-11-04), so the
+  release APK is promoted into the ROM as built. v129 also carries v128 (TOUCH GATE).

@@ -1,6 +1,13 @@
 package com.termux.shadereditor.service;
 
+import android.app.ActivityManager;
+import android.app.WallpaperManager;
 import android.content.ComponentName;
+import android.content.Intent;
+import android.content.pm.ResolveInfo;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.util.Log;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.opengl.GLSurfaceView;
@@ -118,12 +125,55 @@ public class ShaderWallpaperService extends WallpaperService {
 			}
 		}
 
+		// v128 TOUCH GATE (user: pokes went through the recents screen and see-through apps like MiXplorer): Android
+		// copies touches to the wallpaper from ANY window that shows it. A gesture reaches the shader only when the
+		// HOME launcher is the top task at its ACTION_DOWN; a one-finger tap is a boop only when the launcher also
+		// sends COMMAND_TAP (SimFeed.tapConfirmed). System UID: getRunningTasks sees every task.
+		private boolean gateOpen;
+		private String homePkg;
+		private long homeAtMs;
+
+		private boolean homeOnTop() {
+			try {
+				long t = SystemClock.uptimeMillis();
+				if (homePkg == null || t - homeAtMs > 60_000L) {
+					ResolveInfo ri = getPackageManager().resolveActivity(
+							new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+							PackageManager.MATCH_DEFAULT_ONLY);
+					homePkg = ri != null && ri.activityInfo != null ? ri.activityInfo.packageName : null;
+					homeAtMs = t;
+				}
+				ActivityManager am = getSystemService(ActivityManager.class);
+				java.util.List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(1);
+				if (homePkg == null || tasks == null || tasks.isEmpty() || tasks.get(0).topActivity == null) {
+					return true;                      // cannot tell: do not lock the user out
+				}
+				return homePkg.equals(tasks.get(0).topActivity.getPackageName());
+			} catch (RuntimeException ex) {
+				return true;
+			}
+		}
+
 		@Override
 		public void onTouchEvent(MotionEvent e) {
 			super.onTouchEvent(e);
-			if (view != null) {
+			if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+				gateOpen = homeOnTop();
+				if (!gateOpen) {
+					Log.i("TouchGate", "touch ignored: home launcher not on top");
+				}
+			}
+			if (view != null && gateOpen) {
 				view.getRenderer().touchAt(e);
 			}
+		}
+
+		@Override
+		public Bundle onCommand(String action, int x, int y, int z, Bundle extras, boolean resultRequested) {
+			if (WallpaperManager.COMMAND_TAP.equals(action) && view != null && gateOpen) {
+				view.getRenderer().wallpaperTap(SystemClock.uptimeMillis() * 1_000_000L);
+			}
+			return super.onCommand(action, x, y, z, extras, resultRequested);
 		}
 
 		@Override

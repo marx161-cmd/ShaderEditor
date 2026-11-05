@@ -142,6 +142,14 @@ final class SimFeed {
 	private float downY;
 	private int maxPointers;
 	private boolean moved;
+	// v128 TOUCH GATE: a one-finger tap becomes a boop only when the launcher confirms it as a tap on EMPTY home space
+	// (WallpaperManager.COMMAND_TAP, see tapConfirmed); recents and see-through apps never send one
+	private static final long TAP_CONFIRM_NS = 500_000_000L;
+	private boolean boopPending;
+	private long boopPendNs;
+	private float boopPendX;
+	private float boopPendY;
+	private long tapCmdNs = Long.MIN_VALUE / 2;
 	// v117 gestures: live pointers in canvas px (y up) + a sequence id, written to the GEST block every frame
 	private final float[] ptrX = new float[4];
 	private final float[] ptrY = new float[4];
@@ -292,9 +300,13 @@ final class SimFeed {
 						tap3Y = canvasH - cy / n;
 						++taps3;
 					} else if (maxPointers == 1) {
-						boopX = e.getX();
-						boopY = canvasH - e.getY();   // canvas px, y up (GL fragCoord)
-						++boops;
+						boopPendX = e.getX();
+						boopPendY = canvasH - e.getY();   // canvas px, y up (GL fragCoord)
+						boopPendNs = now;
+						boopPending = true;
+						if (Math.abs(now - tapCmdNs) < TAP_CONFIRM_NS) {
+							commitBoop();             // the launcher's tap came first
+						}
 					}
 				}
 				ptrN = 0;
@@ -303,6 +315,22 @@ final class SimFeed {
 			default -> {
 			}
 		}
+	}
+
+	/** v128 TOUCH GATE: the launcher reported a tap on empty home space (uptime ns, the MotionEvent clock). */
+	void tapConfirmed(long nowNs) {
+		tapCmdNs = nowNs;
+		if (boopPending && Math.abs(nowNs - boopPendNs) < TAP_CONFIRM_NS) {
+			commitBoop();
+		}
+	}
+
+	private void commitBoop() {
+		boopX = boopPendX;
+		boopY = boopPendY;
+		boopPending = false;
+		tapCmdNs = Long.MIN_VALUE / 2;               // one confirmation, one boop
+		++boops;
 	}
 
 	/** v117: current pointers in canvas px (y up); a lifted finger simply leaves the remaining ones. */
