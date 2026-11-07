@@ -251,6 +251,7 @@ public class ShaderWallpaperService extends WallpaperService {
 				view.setKeepState(ShaderView.parseKeepState(src));
 				view.setFeed(src);
 				if (!isPreview()) {
+					KnockDetector.setWanted(ShaderWallpaperService.this, src.contains("knockCount"));   // v133
 					ShaderControls.update(ShaderWallpaperService.this, src);   // BUTTON_ lines (v116)
 				}
 			}

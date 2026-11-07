@@ -768,3 +768,13 @@ closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at
   SimFeed that stayed "hidden" (only onSurfaceChanged marks it visible) -> brain paused until a hide/show (user: "brain
   still off ... it might be hung up"). The renderer now hands a new feed the live canvas + visible state when it is shown.
   Verified: ringbox_phone switched in by intent, brain resumed its autosave at once.
+
+## 2026-11-07 v133 KNOCKS GATED (user: "400 times per second? ... can't we gate that smarter")
+- Measured first: orrery 849 mA vs a black test shader 481 mA (brightness 166); sensor HAL ~22 % CPU with the
+  400 Hz knock stream running for EVERY visible wallpaper (only worms + ember box read knockCount).
+- Now: the detector runs only when the wallpaper source contains `knockCount`. IDLE = accelerometer 50 Hz, batched
+  0.5 s, waits for any jolt (> max(1.0 m/s^2, 6 x idle floor)); a jolt ARMS the unchanged 400 Hz detector, batched
+  0.2 s, until 5 s without a knock. User OK'd: the first knock of a run only wakes it, and knocks may be NOTICED late
+  ("like an animal noticing the rhythm") as long as the tapped timing holds -- it does: knocks carry the hardware
+  timestamp and BeatClock books onsets by age. FIFO 3000 events.
+- Installed, NOT yet tested live (screen was off): needs knocking on worms + mA before/after with the screen on.
