@@ -756,3 +756,11 @@ closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at
   never fires; user: "it just opens and closes the button overview no matter where I tap"). So the remote gets a
   real button: `#define BUTTON_remote <label>` (with NOTIFY_REMOTE set) opens the pad via PendingIntent.getActivity
   instead of a press broadcast. The body tap stays wired (harmless where a ROM honours it).
+
+## 2026-11-07 v131 KEEP RENDERING (debug toggle)
+- User: "a debug mode that keeps the backdrop running when not visible (screen off / other app) so I don't need to keep
+  the screen on, with a flag or intent to toggle".
+- `am broadcast -n com.termux.shadereditor/.receiver.WallpaperControlReceiver -a com.termux.shadereditor.action.KEEP_RENDERING [--ez on true|false]`
+  (no extra = toggle). While on: a hidden wallpaper is not paused, plus a PARTIAL wake lock. Memory only (reboot = off).
+- Verified: screen off (Dozing) the GL thread keeps running (worms 31 % of a core). First use: found the binary_orrery
+  PowerVR recompile storm (meteor integrator dead code, fixed in shader-backdrop buffer_a.glsl).

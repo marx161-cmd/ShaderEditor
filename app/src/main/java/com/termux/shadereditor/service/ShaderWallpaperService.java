@@ -6,6 +6,7 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
 import android.content.SharedPreferences;
@@ -41,6 +42,34 @@ public class ShaderWallpaperService extends WallpaperService {
 	public static void reloadShader() {
 		if (engine != null) {
 			engine.setShader();
+		}
+	}
+
+	// v131 KEEP RENDERING (debug, user 2026-11-07: "keep the backdrop running when not visible, screen off or another
+	// app on top, so I can test without keeping the screen on"). Memory only: a reboot or process restart turns it off.
+	// While on, a hidden wallpaper is NOT paused and a partial wake lock keeps the CPU awake for the render thread.
+	private static boolean keepRendering;
+	private static PowerManager.WakeLock keepLock;
+
+	public static boolean isKeepRendering() {
+		return keepRendering;
+	}
+
+	public static synchronized void setKeepRendering(android.content.Context context, boolean on) {
+		keepRendering = on;
+		if (on && keepLock == null) {
+			PowerManager pm = (PowerManager) context.getApplicationContext()
+					.getSystemService(POWER_SERVICE);
+			keepLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "shadereditor:keep_rendering");
+			keepLock.setReferenceCounted(false);
+			keepLock.acquire();
+		} else if (!on && keepLock != null) {
+			keepLock.release();
+			keepLock = null;
+		}
+		Log.i("WallpaperControl", "KEEP_RENDERING " + (on ? "ON" : "OFF"));
+		if (engine != null) {
+			engine.applyRunState();
 		}
 	}
 
@@ -115,10 +144,19 @@ public class ShaderWallpaperService extends WallpaperService {
 				ShaderControls.setVisible(visible);
 				KnockDetector.setVisible(ShaderWallpaperService.this, visible);   // v124 body knocks
 			}
+			shownNow = visible;
+			applyRunState();
+		}
+
+		private boolean shownNow;
+
+		// Runs the view when shown, or when KEEP RENDERING is on (never for the picker preview).
+		void applyRunState() {
 			if (view == null) {
 				return;
 			}
-			if (visible) {
+			boolean run = shownNow || (keepRendering && !isPreview());
+			if (run) {
 				view.onResume();
 			} else {
 				view.onPause();

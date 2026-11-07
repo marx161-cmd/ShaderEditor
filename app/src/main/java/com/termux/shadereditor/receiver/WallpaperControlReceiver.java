@@ -20,13 +20,17 @@ import com.termux.shadereditor.service.ShaderWallpaperService;
  *       -a com.termux.shadereditor.action.RELOAD_WALLPAPER
  * "shader" = a file name in ~/shaders (".glsl" optional); "--el id <n>" works too. RELOAD re-reads
  * the current wallpaper's file. If ShaderEditor is not the live wallpaper (an app install resets it),
- * it makes itself the live wallpaper first. Senders need WRITE_SECURE_SETTINGS (adb shell, UID 1000 = Termux).
+ * it makes itself the live wallpaper first.
+ * v131 debug: -a com.termux.shadereditor.action.KEEP_RENDERING [--ez on true|false] keeps the wallpaper rendering while
+ * hidden (screen off, app on top); no extra = toggle. Memory only, off again after a reboot. Senders need WRITE_SECURE_SETTINGS (adb shell, UID 1000 = Termux).
  */
 public class WallpaperControlReceiver extends BroadcastReceiver {
 	public static final String ACTION_SET =
 			"com.termux.shadereditor.action.SET_WALLPAPER";
 	public static final String ACTION_RELOAD =
 			"com.termux.shadereditor.action.RELOAD_WALLPAPER";
+	public static final String ACTION_KEEP =
+			"com.termux.shadereditor.action.KEEP_RENDERING";
 	private static final String TAG = "WallpaperControl";
 
 	@Override
@@ -34,6 +38,14 @@ public class WallpaperControlReceiver extends BroadcastReceiver {
 		String action = intent.getAction();
 		long current = ShaderEditorApp.preferences.getWallpaperShader();
 		long id;
+		if (ACTION_KEEP.equals(action)) {
+			boolean on = intent.hasExtra("on")
+					? intent.getBooleanExtra("on", false)
+					: !ShaderWallpaperService.isKeepRendering();
+			ShaderWallpaperService.setKeepRendering(context, on);
+			result(0);
+			return;
+		}
 		if (ACTION_SET.equals(action)) {
 			id = intent.getLongExtra("id", -1);
 			String name = intent.getStringExtra("shader");
