@@ -140,12 +140,21 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 	}
 
 	// Same feed + exports as before = keep the running one (its touch counters and mappings).
+	private volatile boolean feedShown;   // between onSurfaceChanged and pause (v132)
+
 	public void setFeed(String name, List<String> exports) {
 		SimFeed f = simFeed;
 		if (name == null) {
 			simFeed = null;
 		} else if (f == null || !f.getName().equals(name) || !f.getExports().equals(exports)) {
-			simFeed = new SimFeed(name, exports);
+			SimFeed nf = new SimFeed(name, exports);
+			// v132: a feed switched in while ALREADY shown (SET_WALLPAPER intent) never saw a surface change, so it
+			// stayed "hidden" and its brain sat paused until the next hide/show. Hand it the live state now.
+			if (feedShown && surfaceWidth > 0) {
+				nf.setCanvas(surfaceWidth, surfaceHeight);
+				nf.setVisible(true);
+			}
+			simFeed = nf;
 		}
 	}
 
@@ -159,6 +168,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 
 	// Called by the view after the GL thread paused.
 	public void pause() {
+		feedShown = false;
 		SimFeed f = simFeed;
 		if (f != null) {
 			f.setVisible(false);
@@ -267,6 +277,7 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		freshContext = false;
 		surfaceWidth = width;
 		surfaceHeight = height;
+		feedShown = true;
 		SimFeed feed = simFeed;
 		if (feed != null) {
 			feed.setCanvas(width, height);

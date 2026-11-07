@@ -764,3 +764,7 @@ closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at
   (no extra = toggle). While on: a hidden wallpaper is not paused, plus a PARTIAL wake lock. Memory only (reboot = off).
 - Verified: screen off (Dozing) the GL thread keeps running (worms 31 % of a core). First use: found the binary_orrery
   PowerVR recompile storm (meteor integrator dead code, fixed in shader-backdrop buffer_a.glsl).
+- v132 (same day): a SIM FEED shader switched in by SET_WALLPAPER while the wallpaper was already shown got a new
+  SimFeed that stayed "hidden" (only onSurfaceChanged marks it visible) -> brain paused until a hide/show (user: "brain
+  still off ... it might be hung up"). The renderer now hands a new feed the live canvas + visible state when it is shown.
+  Verified: ringbox_phone switched in by intent, brain resumed its autosave at once.
