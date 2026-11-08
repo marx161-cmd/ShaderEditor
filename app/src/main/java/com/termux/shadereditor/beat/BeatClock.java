@@ -696,7 +696,9 @@ public final class BeatClock {
 			List<MediaController> sessions = msm.getActiveSessions(
 					new ComponentName(context, NotificationService.class));
 			for (MediaController c : sessions) {
-				if (MIRROR_PKG.equals(c.getPackageName())) {
+				if (MIRROR_PKG.equals(c.getPackageName())
+						// 2026-11-08: comrade's card moved into the Float player (session tag "comrade")
+						|| ("com.termux.window".equals(c.getPackageName()) && "comrade".equals(c.getTag()))) {
 					continue;
 				}
 				PlaybackState s = c.getPlaybackState();
