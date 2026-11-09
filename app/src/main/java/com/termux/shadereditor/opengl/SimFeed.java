@@ -15,7 +15,11 @@ import android.view.MotionEvent;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import android.content.Context;
+
 import com.termux.shadereditor.app.ShaderEditorApp;
+import com.termux.shadereditor.beat.BeatClock;
+import com.termux.shadereditor.beat.MusicState;
 import com.termux.shadereditor.service.ShaderControls;
 
 import java.io.File;
@@ -66,14 +70,18 @@ final class SimFeed {
 	// v1 = boops/boop xy/3-finger count (16 bytes). v2 = 24 + 44 bytes, blob table after both.
 	// v3 (v126, 2026-11-03 GYRO FLIGHT, phone-ringbox scope.md): a SENSOR block after the gesture block -- gravity +
 	// gyro rate every frame while the brain asks for them (feed record "u_flySensors" > 0.5) and the wallpaper is visible.
-	private static final int IN_VERSION = 3;
+	// v4 (v134, 2026-11-09, orrery brain): a BEAT block after the sensors -- the BeatClock + music state every frame, so a
+	// brain never needs a FEED_EXPORT readback for the beat (the PBO export every 6 frames stalled a frame = 5 Hz stutter).
+	private static final int IN_VERSION = 4;
 	private static final int TOUCH_OFF = HDR;                 // v2: 24 bytes
 	private static final int TOUCH_LEN = 24;
 	private static final int GEST_OFF = HDR + TOUCH_LEN;      // v2: 44 bytes (count, moved, seq, 4 x (x, y))
 	private static final int GEST_LEN = 44;
 	private static final int SENS_OFF = GEST_OFF + GEST_LEN;  // v3: 32 bytes (on, sample count, gravity xyz, gyro xyz)
 	private static final int SENS_LEN = 32;
-	private static final int BLOB_OFF = SENS_OFF + SENS_LEN;
+	private static final int BEAT_OFF = SENS_OFF + SENS_LEN;  // v4: 32 bytes (count, phase, conf, bpm, drop in, bar phase, song pos, valid)
+	private static final int BEAT_LEN = 32;
+	private static final int BLOB_OFF = BEAT_OFF + BEAT_LEN;
 	private static final int EXPORT_EVERY = 6;
 	private static final long TAP_MAX_NS = 250_000_000L;
 	private static final float TAP_SLOP_PX = 40f;
@@ -201,7 +209,17 @@ final class SimFeed {
 	private boolean[] pending;
 	private int[] exportTexels;
 
+	@Nullable
+	private final Context context;           // v4: for the BeatClock (acquired on the first header write, released by close())
+	@Nullable
+	private BeatClock beatClock;
+
 	SimFeed(@NonNull String name, @NonNull List<String> exports) {
+		this(name, exports, null);
+	}
+
+	SimFeed(@NonNull String name, @NonNull List<String> exports, @Nullable Context context) {
+		this.context = context;
 		this.name = name;
 		this.exports = exports;
 	}
@@ -833,6 +851,27 @@ final class SimFeed {
 		for (int i = 0; i < ShaderControls.MAX; ++i) {   // CONTROL NOTIFICATION presses (v116), header 32..63
 			m.putInt(32 + 4 * i, ShaderControls.count(i));
 		}
+		BeatClock bc = beatClock;                // v4: the beat clock, every frame (orrery brain: no readback needed)
+		if (bc == null && context != null) {
+			beatClock = bc = BeatClock.acquire(context);
+		}
+		if (bc != null) {
+			BeatClock.State b = bc.state();
+			double count = b.countAt(nowNs);
+			MusicState.Snapshot ms = bc.music();
+			m.putFloat(BEAT_OFF, (float) count);
+			m.putFloat(BEAT_OFF + 4, (float) (count - Math.floor(count)));
+			m.putFloat(BEAT_OFF + 8, (float) b.conf);
+			m.putFloat(BEAT_OFF + 12, (float) b.bpm);
+			m.putFloat(BEAT_OFF + 16, ms.dropIn);
+			m.putFloat(BEAT_OFF + 20, ms.barPhase);
+			m.putFloat(BEAT_OFF + 24, ms.songPos);
+			m.putInt(BEAT_OFF + 28, 1);
+		} else {
+			for (int i = 0; i < BEAT_LEN; i += 4) {
+				m.putInt(BEAT_OFF + i, 0);
+			}
+		}
 		inSeq = (inSeq | 1) + 1;
 		m.putInt(8, inSeq);                      // even = complete
 	}
@@ -880,6 +919,14 @@ final class SimFeed {
 	}
 
 	/** GL objects die with the context: forget them (fresh context) or delete them (live context). */
+	/** The feed is being dropped or replaced (ShaderRenderer.setFeed): let the beat clock go. */
+	void close() {
+		if (beatClock != null) {
+			beatClock = null;
+			BeatClock.release();
+		}
+	}
+
 	void releaseGl(@Nullable GlDevice device) {
 		setSensors(false);
 		if (pbos != null && device != null) {

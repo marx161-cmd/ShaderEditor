@@ -778,3 +778,14 @@ closely as two consecutive saves without a load (66.5 % vs 66.3 % within 0.02 at
   ("like an animal noticing the rhythm") as long as the tapped timing holds -- it does: knocks carry the hardware
   timestamp and BeatClock books onsets by age. FIFO 3000 events.
 - Installed, NOT yet tested live (screen was off): needs knocking on worms + mA before/after with the screen on.
+
+## 2026-11-09 v134 SIM FEED RETURN FILE v4: the BEAT CLOCK every frame (orrery brain)
+- Why: the binary_orrery feed brain (shader-backdrop phone-orrery/brain.py) read beatCount/bpm/drop-in through a
+  FEED_EXPORT compute image; the PBO readback every EXPORT_EVERY = 6 frames stalled a frame each time = a 5 Hz stutter
+  in the wallpaper (user: "very jittery"; A/B without the export: "smooth now").
+- Now: SimFeed writes a 32-byte BEAT block after the sensor block, before the blob table (IN_VERSION 4): beatCount
+  (float, countAt the frame's time), beatPhase, beatConf, beatBpm, u_ms_drop_in, u_ms_bar_phase, u_ms_song_pos, valid
+  (u32 1 when a BeatClock is attached). SimFeed takes the renderer's Context and acquires the BeatClock on its first
+  header write; ShaderRenderer.setFeed closes a dropped / replaced feed (BeatClock.release()). Brains: orrery reads it
+  (v4) and falls back to the blob for v3 apps; the ringbox brain skips the 32 bytes for v4 (both copies patched).
+- Not changed: FEED_EXPORT itself (still every 6 frames for shaders that use it -- the ringbox's cnt/grid).

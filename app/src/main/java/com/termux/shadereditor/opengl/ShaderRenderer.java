@@ -146,8 +146,14 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 		SimFeed f = simFeed;
 		if (name == null) {
 			simFeed = null;
+			if (f != null) {
+				f.close();
+			}
 		} else if (f == null || !f.getName().equals(name) || !f.getExports().equals(exports)) {
-			SimFeed nf = new SimFeed(name, exports);
+			SimFeed nf = new SimFeed(name, exports, context);
+			if (f != null) {
+				f.close();
+			}
 			// v132: a feed switched in while ALREADY shown (SET_WALLPAPER intent) never saw a surface change, so it
 			// stayed "hidden" and its brain sat paused until the next hide/show. Hand it the live state now.
 			if (feedShown && surfaceWidth > 0) {
